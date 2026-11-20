@@ -1,0 +1,6 @@
+# لا تُنشر هذه المجلدات على Vercel (للاستخدام المحلي/التوثيق فقط)
+backend/
+database/
+backup/
+.env
+*.log
