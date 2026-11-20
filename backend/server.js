@@ -33,12 +33,12 @@ app.use(cors());
 app.use(express.json({ limit: '25mb' }));
 
 // تقديم ملفات الواجهة الأمامية وأدوات التصدير
-app.use(express.static(path.join(__dirname, '..', 'frontend')));
-app.use('/tools', express.static(path.join(__dirname, '..', 'tools')));
+app.use(express.static(path.join(__dirname, '..', 'public')));
+app.use('/tools', express.static(path.join(__dirname, '..', 'public', 'tools')));
 
 // الصفحة الرئيسية -> الواجهة
 app.get('/', (_req, res) => {
-  res.sendFile(path.join(__dirname, '..', 'frontend', 'وصل.html'));
+  res.sendFile(path.join(__dirname, '..', 'public', 'index.html'));
 });
 
 // فحص الصحة

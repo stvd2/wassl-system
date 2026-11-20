@@ -1,53 +1,64 @@
 # نظام وَصْل (Wassl)
 
-نظام إدارة الإحالات الطبية — نسخة متصلة بقاعدة بيانات **Supabase** عبر خادم وسيط.
+نظام إدارة الإحالات الطبية — متصل بقاعدة بيانات **Supabase**.
+
+يدعم وضعين للتشغيل:
+- **محلياً** عبر خادم Node/Express (`backend/`).
+- **منشوراً على Vercel** عبر Serverless Functions (`api/`).
 
 ## البنية
 
 ```
 wassl-system/
-├── frontend/   → وصل.html (الواجهة — تُقرأ/تُكتب عبر الخادم)
-├── backend/    → خادم Node/Express الوسيط (يتصل بـ Supabase)
-├── database/   → schema.sql (مخطط قاعدة البيانات)
-├── tools/      → export.html (تصدير/ترحيل البيانات)
-└── backup/     → نسخة احتياطية من الملف الأصلي (لا تُعدَّل)
+├── public/          → الواجهة الثابتة (index.html + tools/export.html)
+├── api/             → دوال Vercel serverless (/api/state, /api/import, /api/health)
+├── backend/         → خادم Node/Express للتشغيل المحلي
+├── database/        → schema.sql (مخطط قاعدة البيانات)
+├── backup/          → نسخة احتياطية من الملف الأصلي
+├── package.json     → تبعيات دوال Vercel
+└── .gitignore
 ```
 
 ## المتطلبات
 
 - Node.js v18 أو أحدث.
-- مشروع Supabase جاهز (Project URL + service_role key).
+- مشروع Supabase جاهز (Project URL + المفتاح السري `sb_secret_...` / `service_role`).
 
-## خطوات التشغيل
+## إعداد قاعدة البيانات (مرة واحدة)
 
-### 1) إعداد قاعدة البيانات (مرة واحدة)
-افتح لوحة Supabase ← `SQL Editor` ← `New query` ← الصق محتوى `database/schema.sql` كاملاً ← `Run`.
+افتح Supabase ← `SQL Editor` ← الصق محتوى `database/schema.sql` كاملاً ← `Run`.
 
-### 2) إعداد الخادم
+## التشغيل المحلي
+
 ```bash
 cd backend
-copy .env.example .env     # ثم افتح .env وعبّئ SUPABASE_URL و SUPABASE_SERVICE_ROLE_KEY
+copy .env.example .env     # عبّئ SUPABASE_URL و SUPABASE_SERVICE_ROLE_KEY
 npm install
 npm start
 ```
+ثم افتح المتصفح على: **http://localhost:3001**
 
-### 3) فتح التطبيق
-افتح المتصفح على: **http://localhost:3001**
+## النشر على Vercel
 
-> يمكن أيضاً فتح `frontend/وصل.html` مباشرة من القرص (double-click) مع إبقاء الخادم يعمل على المنفذ 3001.
+1. ارفع المشروع إلى مستودع GitHub.
+2. في [Vercel](https://vercel.com): **Add New → Project → Import Git Repository** ← اختر المستودع.
+3. أضف متغيري البيئة في **Settings → Environment Variables**:
+   - `SUPABASE_URL`
+   - `SUPABASE_SERVICE_ROLE_KEY`
+4. اضغط **Deploy**. Vercel يكتشف `public/` (الملفات الثابتة) و `api/` (الدوال) تلقائياً.
 
 ## ترحيل البيانات الحالية (من localStorage)
 
-- **تلقائياً:** عند أول فتح للتطبيق بعد التوصيل، إن لم يجد الخادم بيانات ووجد نسخة محلية، يرفع النسخة المحلية إلى Supabase تلقائياً.
-- **يدوياً:** افتح `http://localhost:3001/tools/export.html` واضغط «إرسال البيانات إلى الخادم» (أو نزّل نسخة JSON احتياطية أولاً).
+- **تلقائياً:** عند أول فتح للتطبيق بعد التوصيل، إن لم يجد الخادم بيانات ووجد نسخة محلية، يرفعها إلى Supabase تلقائياً.
+- **يدوياً:** افتح `tools/export.html` (محلياً) أو `https://your-app.vercel.app/tools/export.html` واضغط «إرسال البيانات إلى الخادم».
 
 ## كيف يعمل الاتصال
 
-- الواجهة تحتفظ بنسخة محلية في `localStorage` كذاكرة مؤقتة، والخادم/Supabase هو **المصدر الأساسي** للبيانات.
-- الوصول إلى Supabase يتم **حصرياً عبر الخادم** باستخدام `service_role`؛ المتصفح لا يحمل أي مفتاح Supabase.
+- الواجهة تحتفظ بنسخة محلية في `localStorage` كذاكرة مؤقتة، وSupabase هو **المصدر الأساسي**.
+- الوصول إلى Supabase يتم **حصرياً عبر الخادم/الدوال** باستخدام المفتاح السري؛ المتصفح لا يحمل أي مفتاح Supabase.
 - نقاط النهاية: `GET/PUT/DELETE /api/state` و `POST /api/import` و `GET /api/health`.
 
 ## ملاحظات أمنية (للإنتاج)
 
-- هذا الإعداد يصلح للتشغيل الداخلي/التجريبي. للإنتاج يُفضَّل: مصادقة فعلية عبر Supabase Auth، نموذج علائقي بجداول منفصلة مع RLS لكل دور، وHTTPS.
-- لا ترفع ملف `.env` (يحتوي مفتاح service_role) إلى أي مستودع عام.
+- هذا الإعداد يصلح للتشغيل الداخلي/التجريبي. للإنتاج يُفضَّل: مصادقة فعلية عبر Supabase Auth، نموذج علائقي بجداول منفصلة مع RLS لكل دور، وHTTPS (Vercel يوفّر HTTPS تلقائياً).
+- لا ترفع ملف `.env` (يحتوي المفتاح السري) إلى أي مستودع عام.

@@ -282,7 +282,7 @@ const STORAGE_KEY = 'wasl_v6';
 const SESSION_KEY = 'wasl_session_v6';
 const LOGO_STORAGE_KEY = 'wasl_logos_cache_v1';
 // عنوان الخادم الوسيط (Node/Express + Supabase) — يمكن تجاوزه عبر window.WASL_API_BASE
-const API_BASE = (window.WASL_API_BASE || 'http://localhost:3001').replace(/\/$/, '');
+const API_BASE = (window.WASL_API_BASE || '').replace(/\/$/, '');
 let DATA = null;
 let CURRENT_USER = null;
 let PAGE = 'dashboard';
