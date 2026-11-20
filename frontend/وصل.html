@@ -281,6 +281,8 @@ table.t tr:hover td{background:#fafcfc}
 const STORAGE_KEY = 'wasl_v6';
 const SESSION_KEY = 'wasl_session_v6';
 const LOGO_STORAGE_KEY = 'wasl_logos_cache_v1';
+// عنوان الخادم الوسيط (Node/Express + Supabase) — يمكن تجاوزه عبر window.WASL_API_BASE
+const API_BASE = (window.WASL_API_BASE || 'http://localhost:3001').replace(/\/$/, '');
 let DATA = null;
 let CURRENT_USER = null;
 let PAGE = 'dashboard';
@@ -678,15 +680,49 @@ const ACTION_PERMS = {
 // ═══════════════════════════════════════════════════════════════════
 // التحميل والحفظ
 // ═══════════════════════════════════════════════════════════════════
-function loadData() {
+function loadDataSync() {
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
     if (raw) { const p = JSON.parse(raw); if (p && p.meta && p.meta.version === 'v6') return p; }
   } catch (e) {}
   return null;
 }
+
+async function loadData() {
+  // 1) المصدر الأساسي: الخادم → Supabase
+  try {
+    const res = await fetch(API_BASE + '/api/state', { cache: 'no-store' });
+    if (res.ok) {
+      const p = await res.json();
+      if (p && p.meta && p.meta.version === 'v6') {
+        try { localStorage.setItem(STORAGE_KEY, JSON.stringify(p)); } catch (e) {}
+        return p;
+      }
+    }
+  } catch (e) { /* الخادم غير متاح — نكمل على النسخة المحلية */ }
+
+  // 2) الاحتياطي المحلي (ونرفعه للخادم لاحقاً عند أول حفظ)
+  const local = loadDataSync();
+  if (local) syncToBackend();
+  return local;
+}
+
+let _saveTimer = null;
+function syncToBackend() {
+  if (_saveTimer) clearTimeout(_saveTimer);
+  _saveTimer = setTimeout(async () => {
+    try {
+      await fetch(API_BASE + '/api/state', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(DATA)
+      });
+    } catch (e) { /* تجاهل — تبقى النسخة المحلية صالحة */ }
+  }, 400);
+}
+
 function saveData() {
-  try { localStorage.setItem(STORAGE_KEY, JSON.stringify(DATA)); return true; }
+  try { localStorage.setItem(STORAGE_KEY, JSON.stringify(DATA)); syncToBackend(); return true; }
   catch (e) { toast('فشل الحفظ: ' + e.message, 'err'); return false; }
 }
 function initData() {
@@ -2878,6 +2914,7 @@ function resetAll() {
   localStorage.removeItem(OBF_KEY_STORE);
   sessionStorage.removeItem(SESSION_KEY);
   try { indexedDB.deleteDatabase('wasl_attachments_v1'); } catch (e) {}
+  try { fetch(API_BASE + '/api/state', { method: 'DELETE' }).catch(() => {}); } catch (e) {}
   setTimeout(() => location.reload(), 400);
 }
 
@@ -2887,7 +2924,7 @@ function resetAll() {
 (async function boot() {
   const btn = $('loginBtn'), btnText = $('loginBtnText'), errEl = $('loginErr');
   try {
-    DATA = loadData();
+    DATA = await loadData();
     if (!DATA) { DATA = initData(); saveData(); }
     if (!DATA.notifications) DATA.notifications = [];
     if (!DATA.attachments || typeof DATA.attachments !== 'object') DATA.attachments = {};
