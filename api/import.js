@@ -1,5 +1,5 @@
-// Vercel Serverless Function — نقطة /api/import (POST) للترحيل الأولي
-import { createClient } from '@supabase/supabase-js';
+// Vercel Serverless Function — نقطة /api/import (POST) — CommonJS
+const { createClient } = require('@supabase/supabase-js');
 
 const supabase = createClient(
   process.env.SUPABASE_URL,
@@ -8,7 +8,7 @@ const supabase = createClient(
 );
 const STATE_ID = 'main';
 
-export default async function handler(req, res) {
+module.exports = async function handler(req, res) {
   if (req.method !== 'POST') return res.status(405).json({ error: 'method not allowed' });
   try {
     const payload = req.body;
@@ -24,4 +24,4 @@ export default async function handler(req, res) {
     console.error('[WASL] /api/import:', e.message);
     return res.status(500).json({ error: e.message });
   }
-}
+};

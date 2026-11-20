@@ -1,5 +1,5 @@
-// Vercel Serverless Function — نقطة /api/state (GET/PUT/DELETE)
-import { createClient } from '@supabase/supabase-js';
+// Vercel Serverless Function — نقطة /api/state (GET/PUT/DELETE) — CommonJS
+const { createClient } = require('@supabase/supabase-js');
 
 const supabase = createClient(
   process.env.SUPABASE_URL,
@@ -8,7 +8,7 @@ const supabase = createClient(
 );
 const STATE_ID = 'main';
 
-export default async function handler(req, res) {
+module.exports = async function handler(req, res) {
   const { method } = req;
   try {
     if (method === 'GET') {
@@ -41,4 +41,4 @@ export default async function handler(req, res) {
     console.error('[WASL] /api/state:', e.message);
     return res.status(500).json({ error: e.message });
   }
-}
+};
