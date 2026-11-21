@@ -4,6 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>وصل v9.0 | نظام إدارة الإحالات الطبية</title>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <style>
 :root{--navy:#123047;--teal:#087f78;--bg:#f3f6f8;--card:#fff;--text:#20313d;--muted:#70818c;--line:#e4eaee;--red:#c44747;--green:#17845b;--amber:#a66b12;--purple:#6c4ab0;--shadow:0 8px 28px rgba(20,48,65,.07)}
 *{box-sizing:border-box}body{margin:0;background:var(--bg);font-family:"Segoe UI",Tahoma,Arial,sans-serif;color:var(--text);font-size:14px;line-height:1.5}
@@ -283,11 +284,38 @@ const SESSION_KEY = 'wasl_session_v6';
 const LOGO_STORAGE_KEY = 'wasl_logos_cache_v1';
 // عنوان الخادم الوسيط (Node/Express + Supabase) — يمكن تجاوزه عبر window.WASL_API_BASE
 const API_BASE = (window.WASL_API_BASE || '').replace(/\/$/, '');
+const SUPABASE_PUBLIC_URL = 'https://rtnzxmedlmymtgyzgmhp.supabase.co';
+const SUPABASE_PUBLISHABLE_KEY = 'sb_publishable_mROaMe2BCRBDcwkxExZgRQ_kMTpL2E1';
+let DATA = null;
 let DATA = null;
 let CURRENT_USER = null;
 let PAGE = 'dashboard';
 let CURRENT_CHAT = null;
 let CHAT_TAB = 'direct';
+let REALTIME_CHANNEL = null;
+let REALTIME_REFRESH_TIMER = null;
+
+function setupRealtime() {
+  if (REALTIME_CHANNEL || !window.supabase?.createClient) return;
+  try {
+    const client = window.supabase.createClient(SUPABASE_PUBLIC_URL, SUPABASE_PUBLISHABLE_KEY, {
+      auth: { persistSession: false, autoRefreshToken: false }
+    });
+    REALTIME_CHANNEL = client.channel('wasl-app-state')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'app_state' }, () => {
+        clearTimeout(REALTIME_REFRESH_TIMER);
+        REALTIME_REFRESH_TIMER = setTimeout(() => window.location.reload(), 250);
+      })
+      .subscribe((status) => {
+        if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT') {
+          console.warn('[WASL] Realtime unavailable:', status);
+          REALTIME_CHANNEL = null;
+        }
+      });
+  } catch (e) {
+    console.warn('[WASL] Realtime setup failed:', e.message);
+  }
+}
 
 const PRINT_LOGOS = {
   hospital: 'https://res.cloudinary.com/dbahe7lxz/image/upload/v1794522340/idraaak/dg14owr5kmstc6s4fzsl.jpg',
@@ -2932,6 +2960,7 @@ function resetAll() {
     if (!DATA.attachments || typeof DATA.attachments !== 'object') DATA.attachments = {};
     if (!Array.isArray(DATA.chats)) DATA.chats = [];
     if (!Array.isArray(DATA.shifts)) DATA.shifts = [];
+    setupRealtime();
     seedIfNeeded(false);
     migrateOldStates();
     ensureChatShiftsData();
