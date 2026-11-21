@@ -308,6 +308,7 @@ let CURRENT_CHAT = null;
 let CHAT_TAB = 'direct';
 let REALTIME_CHANNEL = null;
 let REALTIME_REFRESH_TIMER = null;
+let REALTIME_POLL_TIMER = null;
 let REALTIME_REFRESHING = false;
 const SYNC_CHANNEL = ('BroadcastChannel' in window) ? new BroadcastChannel('wasl_v9_sync_channel') : null;
 let LOCAL_CHANGE_AT = '';
@@ -353,24 +354,26 @@ async function refreshFromRealtime() {
 }
 
 function setupRealtime() {
+  if (!REALTIME_POLL_TIMER) REALTIME_POLL_TIMER = setInterval(() => refreshFromRealtime(), 8000);
+  window.addEventListener('focus', () => refreshFromRealtime());
   if (REALTIME_CHANNEL || !window.supabase?.createClient) return;
   try {
     const client = window.supabase.createClient(SUPABASE_PUBLIC_URL, SUPABASE_PUBLISHABLE_KEY, {
       auth: { persistSession: false, autoRefreshToken: false }
     });
     REALTIME_CHANNEL = client.channel('wasl-app-state')
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'app_state' }, () => {
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'app_state', filter: 'id=eq.main' }, () => {
         clearTimeout(REALTIME_REFRESH_TIMER);
-        REALTIME_REFRESH_TIMER = setTimeout(refreshFromRealtime, 250);
+        REALTIME_REFRESH_TIMER = setTimeout(refreshFromRealtime, 120);
       })
       .subscribe((status) => {
         if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT') {
-          console.warn('[WASL] Realtime unavailable:', status);
+          console.warn('[WASL] Realtime unavailable; polling remains active:', status);
           REALTIME_CHANNEL = null;
         }
       });
   } catch (e) {
-    console.warn('[WASL] Realtime setup failed:', e.message);
+    console.warn('[WASL] Realtime setup failed; polling remains active:', e.message);
   }
 }
 
@@ -444,6 +447,7 @@ const WARD_OPTIONS = {
   'عيادات':       [],
   'استشارة طبية': []
 };
+const BED_TYPE_OPTIONS = ['طوارئ', 'سرير عادي', 'سرير عزل', 'سرير عناية مركزة'];
 
 const OBF_KEY_STORE = 'wasl_obf_key_v1';
 const DEFAULT_MOBILES = {
@@ -761,23 +765,15 @@ const ACTION_PERMS = {
   'resubmitted→info_requested':        { roles: ['doctor'], label: 'طلب استكمال إضافي', btn: 'warn', icon: '📝' },
   'resubmitted→consultation_done':     { roles: ['doctor'], label: 'إرسال الاستشارة للمنسق', btn: 'primary', icon: '📋' },
   'consultation_done→completed':       { roles: ['coordinator', 'admin'], label: 'إغلاق الاستشارة', btn: 'success', icon: '✓' },
-  'consultation_done→cancelled':       { roles: ['admin'], label: 'إلغاء', btn: 'danger', icon: '🗑' },
   'doctor_accepted→awaiting_bed':      { roles: ['coordinator', 'admin'], label: 'توجيه الإحالة لإدارة الأسرة', btn: 'primary', icon: '→' },
   'doctor_accepted→completed':         { roles: ['coordinator', 'admin'], label: 'تنفيذ القبول وإغلاق الإحالة', btn: 'success', icon: '✓' },
-  'doctor_accepted→cancelled':         { roles: ['admin'], label: 'إلغاء الإحالة', btn: 'danger', icon: '🗑' },
-  'doctor_rejected→cancelled':         { roles: ['admin'], label: 'إغلاق الإحالة المرفوضة', btn: 'danger', icon: '🗑' },
   'awaiting_bed→bed_approved':         { roles: ['beds', 'admin'], label: 'قبول طلب السرير', btn: 'success', icon: '✓' },
   'awaiting_bed→bed_rejected':         { roles: ['beds', 'admin'], label: 'رفض طلب السرير', btn: 'danger', icon: '✕' },
-  'awaiting_bed→cancelled':            { roles: ['admin'], label: 'إلغاء', btn: 'danger', icon: '🗑' },
   'bed_approved→completed':            { roles: ['coordinator', 'admin'], label: 'إغلاق الإحالة', btn: 'success', icon: '✓' },
-  'bed_approved→cancelled':            { roles: ['admin'], label: 'إلغاء', btn: 'danger', icon: '🗑' },
   'bed_rejected→awaiting_bed':         { roles: ['coordinator', 'admin'], label: 'إعادة الإرسال لإدارة الأسرة', btn: 'warn', icon: '↻' },
-  'bed_rejected→cancelled':            { roles: ['admin'], label: 'إغلاق الإحالة', btn: 'danger', icon: '🗑' },
-  'consulting→cancelled':              { roles: ['admin'], label: 'إلغاء الإحالة', btn: 'danger', icon: '🗑' },
   'awaiting_final→doctor_accepted':    { roles: ['doctor'], label: 'قبول نهائي', btn: 'success', icon: '✓' },
   'awaiting_final→doctor_rejected':    { roles: ['doctor'], label: 'رفض نهائي', btn: 'danger', icon: '✕' },
-  'awaiting_final→info_requested':     { roles: ['doctor'], label: 'طلب استكمال', btn: 'warn', icon: '📝' },
-  'awaiting_final→cancelled':          { roles: ['admin'], label: 'إلغاء الإحالة', btn: 'danger', icon: '🗑' }
+  'awaiting_final→info_requested':     { roles: ['doctor'], label: 'طلب استكمال', btn: 'warn', icon: '📝' }
 };
 
 // ═══════════════════════════════════════════════════════════════════
@@ -835,8 +831,18 @@ async function pushStateSnapshot() {
     cache: 'no-store'
   });
   if (res.status === 409) {
-    _syncBlocked = true;
-    toast('تعارض مزامنة: توجد تعديلات أحدث على جهاز آخر. حدّث الصفحة قبل المتابعة.', 'err');
+    const latest = await loadData();
+    if (latest) {
+      DATA = latest;
+      _syncBlocked = false;
+      if (CURRENT_USER) {
+        const me = DATA.users.find(u => u.id === CURRENT_USER.id);
+        if (me) CURRENT_USER = me;
+        buildNav();
+        showPage(PAGE);
+      }
+      toast('تم جلب آخر تحديث من جهاز آخر؛ لم يُستبدل بالتعديل القديم.', 'warn');
+    }
     return;
   }
   if (!res.ok) throw new Error(`فشل حفظ البيانات (${res.status})`);
@@ -972,6 +978,14 @@ function migrateOldStates() {
     if (u.rejection_reason === undefined) { u.rejection_reason = null; changed = true; }
     if (u.department === undefined) { u.department = null; changed = true; }
   }
+  for (const b of (DATA.beds || [])) {
+    if (b.admission_date === undefined) { b.admission_date = ''; changed = true; }
+    if (b.acceptance_date === undefined) { b.acceptance_date = ''; changed = true; }
+    if (b.reservation_duration === undefined) { b.reservation_duration = b.duration || ''; changed = true; }
+    if (b.notes === undefined) { b.notes = ''; changed = true; }
+    if (b.employee_id === undefined) { b.employee_id = ''; changed = true; }
+    if (b.employee_name === undefined) { b.employee_name = ''; changed = true; }
+  }
   if (!Array.isArray(DATA.chats)) { DATA.chats = []; changed = true; }
   if (!Array.isArray(DATA.shifts)) { DATA.shifts = []; changed = true; }
   if (changed) saveData();
@@ -1077,8 +1091,9 @@ function transitionReferral(id, to, payload = {}) {
     r.assigned_doctor_id = r.assigned_doctor_id || CURRENT_USER.id;
     const meta = REFERRAL_TYPE_META[r.priority];
     r.admission_type = meta ? meta.admission : 'قبول تنويم';
-    r.ward_type = (payload.ward_type && payload.ward_type.trim()) || '';
-    r.doctor_mobile = (payload.doctor_mobile && payload.doctor_mobile.trim()) || '';
+    r.ward_type = (payload.emergency_accept === 'نعم' && r.priority === 'طارئ') ? 'طوارئ' : ((payload.ward_type && payload.ward_type.trim()) || '');
+    r.doctor_mobile = CURRENT_USER.mobile || DEFAULT_MOBILES[CURRENT_USER.username] || r.doctor_mobile || '';
+    if (r.priority === 'طارئ' && payload.emergency_accept === 'نعم') r.admission_type = 'قبول طوارئ';
     notifyRole('coordinator', r.id, 'الطبيب قَبِل الإحالة — بانتظار توجيهك', CURRENT_USER.full_name);
   }
   if (to === 'doctor_rejected') {
@@ -1088,6 +1103,7 @@ function transitionReferral(id, to, payload = {}) {
     r.doctor_notes = payload.notes || '';
     r.doctor_responded_at = nowIso();
     r.assigned_doctor_id = r.assigned_doctor_id || CURRENT_USER.id;
+    r.doctor_mobile = CURRENT_USER.mobile || DEFAULT_MOBILES[CURRENT_USER.username] || r.doctor_mobile || '';
     notifyRole('coordinator', r.id, `الطبيب رفض الإحالة — السبب: ${payload.reason}`, CURRENT_USER.full_name);
   }
   if (to === 'info_requested') {
@@ -1107,7 +1123,7 @@ function transitionReferral(id, to, payload = {}) {
     r.consultation_followup = payload.consultation_followup || 'لا';
     r.consultation_notes = payload.consultation_notes || '';
     r.consultation_at = nowIso();
-    r.doctor_mobile = (payload.doctor_mobile && payload.doctor_mobile.trim()) || r.doctor_mobile || '';
+    r.doctor_mobile = CURRENT_USER.mobile || DEFAULT_MOBILES[CURRENT_USER.username] || r.doctor_mobile || '';
     r.doctor_decision = 'consultation';
     r.doctor_responded_at = nowIso();
     r.assigned_doctor_id = r.assigned_doctor_id || CURRENT_USER.id;
@@ -1511,7 +1527,9 @@ function doLogin() {
     }
     user.failed_attempts = 0; user.locked_until = null; saveData();
     CURRENT_USER = user;
-    sessionStorage.setItem(SESSION_KEY, JSON.stringify({ userId: user.id, exp: Date.now() + 8 * 3600e3 }));
+    const session = JSON.stringify({ userId: user.id, exp: Date.now() + 8 * 3600e3 });
+    localStorage.setItem(SESSION_KEY, session);
+    sessionStorage.setItem(SESSION_KEY, session);
     audit('login_success', 'user', user.id, '');
     enterApp();
   } catch (e) {
@@ -1523,6 +1541,7 @@ function doLogin() {
 
 function doLogout() {
   if (CURRENT_USER) audit('logout', 'user', CURRENT_USER.id, '');
+  localStorage.removeItem(SESSION_KEY);
   sessionStorage.removeItem(SESSION_KEY);
   CURRENT_USER = null; CURRENT_CHAT = null;
   $('app').classList.add('hidden');
@@ -1785,7 +1804,7 @@ function buildNav() {
       { id: 'doctor_responded', icon: '✓', label: 'تم الرد عليها', count: refs.filter(x => hasDoctorResponded(x, CURRENT_USER.id)).length }
     ];
   } else if (r === 'beds') {
-    items = [{ id: 'bed_requests', icon: '▣', label: 'طلبات الأسرة', count: refs.filter(x => x.status === 'awaiting_bed').length }];
+    items = [{ id: 'bed_requests', icon: '▣', label: 'طلبات الأسرة', count: refs.filter(x => x.status === 'awaiting_bed').length }, { id: 'bed_management', icon: '🛏', label: 'إدارة الأسرة' }];
   }
 
   if (r === 'admin') {
@@ -1813,7 +1832,7 @@ function showPage(p) {
     else p = 'outgoing';
   }
   if (p === 'doctor_outgoing' || p === 'doctor_admitted') p = 'doctor_responded';
-  if (p === 'bed_management' && CURRENT_USER.role !== 'admin') {
+  if (p === 'bed_management' && !['admin', 'beds'].includes(CURRENT_USER.role)) {
     p = CURRENT_USER.role === 'beds' ? 'bed_requests' : 'outgoing';
   }
   if (p === 'dashboard' && CURRENT_USER.role === 'doctor') p = 'doctor_inbox';
@@ -1962,13 +1981,13 @@ function filterTable(q) {
 function referralActionButtons(r) {
   if (!['admin', 'coordinator'].includes(CURRENT_USER?.role)) return '';
   const terminal = !!STATES[r.status]?.terminal;
-  return `<div style="display:flex;gap:4px;flex-wrap:wrap;justify-content:flex-start"><button class="ghost xs" onclick="openEditReferral('${esc(r.id)}')">✏ تعديل</button>${!terminal ? `<button class="secondary xs" onclick="openTransferReferral('${esc(r.id)}')">↔ تحويل</button><button class="warn xs" onclick="pullReferral('${esc(r.id)}')">↩ سحب</button>` : ''}${CURRENT_USER.role === 'admin' ? `<button class="danger xs" onclick="deleteReferral('${esc(r.id)}')">🗑 حذف</button>` : ''}</div>`;
+  return `<div style="display:flex;gap:4px;flex-wrap:wrap;justify-content:flex-start"><button class="ghost xs" onclick="openEditReferral('${esc(r.id)}')">✏ تعديل</button>${!terminal ? `<button class="secondary xs" onclick="openTransferReferral('${esc(r.id)}')">↔ تحويل</button>` : ''}${CURRENT_USER.role === 'admin' ? `<button class="danger xs" onclick="deleteReferral('${esc(r.id)}')">🗑 حذف</button>` : ''}</div>`;
 }
 
 function openEditReferral(id) {
   if (!['admin', 'coordinator'].includes(CURRENT_USER?.role)) return toast('غير مصرح', 'err');
   const r = DATA.referrals.find(x => x.id === id); if (!r) return toast('الإحالة غير موجودة', 'err');
-  $('modalRoot').innerHTML = `<div class="modal-back" onclick="if(event.target===this)closeModal()"><div class="modal" style="max-width:680px"><div class="mh"><h3>✏ تعديل الإحالة ${esc(refNoOf(r))}</h3><button class="ghost sm" onclick="closeModal()">✕</button></div><form class="grid2" onsubmit="saveReferralEdit(event,'${esc(id)}')"><div class="field"><label>اسم المريض *</label><input name="patient_name" value="${esc(r.patient_name)}" required></div><div class="field"><label>رقم الملف *</label><input name="mrn" value="${esc(r.mrn)}" required dir="ltr"></div><div class="field"><label>القسم النهائي *</label><select name="target_specialty" required>${DEPARTMENTS.map(d => `<option value="${esc(d)}" ${targetSpecialtyOf(r) === d ? 'selected' : ''}>${esc(d)}</option>`).join('')}</select></div><div class="field"><label>نوع الإحالة *</label><select name="priority" required>${REFERRAL_TYPES.map(d => `<option value="${esc(d)}" ${r.priority === d ? 'selected' : ''}>${esc(d)}</option>`).join('')}</select></div><div class="field full"><label>التشخيص *</label><textarea name="diagnosis" required>${esc(r.diagnosis)}</textarea></div><div class="field full"><label>ملاحظات</label><textarea name="notes">${esc(r.notes || '')}</textarea></div><div class="full"><button class="primary" type="submit" style="width:100%">حفظ التعديل</button></div></form></div></div>`;
+  $('modalRoot').innerHTML = `<div class="modal-back" onclick="if(event.target===this)closeModal()"><div class="modal" style="max-width:680px"><div class="mh"><h3>✏ تعديل الإحالة ${esc(refNoOf(r))}</h3><button class="ghost sm" onclick="closeModal()">✕</button></div><form class="grid2" onsubmit="saveReferralEdit(event,'${esc(id)}')"><div class="field"><label>اسم المريض *</label><input name="patient_name" value="${esc(r.patient_name)}" required></div><div class="field"><label>رقم الملف *</label><input name="mrn" value="${esc(r.mrn)}" required dir="ltr"></div><div class="field"><label>القسم النهائي *</label><input name="target_specialty" list="edit-department-options" value="${esc(targetSpecialtyOf(r))}" required><datalist id="edit-department-options">${DEPARTMENTS.map(d => `<option value="${esc(d)}">`).join('')}</datalist></div><div class="field"><label>نوع الإحالة *</label><select name="priority" required>${REFERRAL_TYPES.map(d => `<option value="${esc(d)}" ${r.priority === d ? 'selected' : ''}>${esc(d)}</option>`).join('')}</select></div><div class="field full"><label>التشخيص *</label><textarea name="diagnosis" required>${esc(r.diagnosis)}</textarea></div><div class="field full"><label>ملاحظات</label><textarea name="notes">${esc(r.notes || '')}</textarea></div><div class="full"><button class="primary" type="submit" style="width:100%">حفظ التعديل</button></div></form></div></div>`;
 }
 
 function saveReferralEdit(event, id) {
@@ -2003,7 +2022,7 @@ function pullReferral(id) {
 function openTransferReferral(id) {
   if (!['admin', 'coordinator'].includes(CURRENT_USER?.role)) return toast('غير مصرح', 'err');
   const r = DATA.referrals.find(x => x.id === id); if (!r || STATES[r.status]?.terminal) return toast('لا يمكن تحويل هذه الإحالة', 'err');
-  $('modalRoot').innerHTML = `<div class="modal-back" onclick="if(event.target===this)closeModal()"><div class="modal" style="max-width:500px"><div class="mh"><h3>↔ تحويل الإحالة ${esc(refNoOf(r))}</h3><button class="ghost sm" onclick="closeModal()">✕</button></div><form onsubmit="transferReferral(event,'${esc(id)}')"><div class="field"><label>القسم المستلم *</label><select name="target_specialty" required>${DEPARTMENTS.map(d => `<option value="${esc(d)}" ${targetSpecialtyOf(r) === d ? 'selected' : ''}>${esc(d)}</option>`).join('')}</select></div><div class="field"><label>سبب التحويل</label><textarea name="reason"></textarea></div><button class="primary" type="submit" style="width:100%">تأكيد التحويل</button></form></div></div>`;
+  $('modalRoot').innerHTML = `<div class="modal-back" onclick="if(event.target===this)closeModal()"><div class="modal" style="max-width:500px"><div class="mh"><h3>↔ تحويل الإحالة ${esc(refNoOf(r))}</h3><button class="ghost sm" onclick="closeModal()">✕</button></div><form onsubmit="transferReferral(event,'${esc(id)}')"><div class="field"><label>القسم المستلم *</label><input name="target_specialty" list="transfer-department-options" value="${esc(targetSpecialtyOf(r))}" required><datalist id="transfer-department-options">${DEPARTMENTS.map(d => `<option value="${esc(d)}">`).join('')}</datalist></div><div class="field"><label>سبب التحويل</label><textarea name="reason"></textarea></div><button class="primary" type="submit" style="width:100%">تأكيد التحويل</button></form></div></div>`;
 }
 
 function transferReferral(event, id) {
@@ -2067,10 +2086,8 @@ function renderCreate() {
       <div class="field"><label>المستشفى المُحيل *</label><input name="from_hospital" required value="مستشفى الملك فيصل بمكة"></div>
       <div class="field"><label>المستشفى المحال إليه *</label><input name="to_hospital" required></div>
       <div class="field"><label>القسم النهائي (المحطة الأخيرة للقرار) *</label>
-        <select name="target_specialty" id="targetSpecialtySel" required onchange="syncConsultOptions()">
-          <option value="">— اختر القسم النهائي —</option>
-          ${DEPARTMENTS.map(d => `<option value="${esc(d)}">${esc(d)}</option>`).join('')}
-        </select>
+        <input name="target_specialty" id="targetSpecialtySel" list="department-options" required placeholder="اكتب القسم أو اختره" oninput="syncConsultOptions()">
+        <datalist id="department-options">${DEPARTMENTS.map(d => `<option value="${esc(d)}">`).join('')}</datalist>
       </div>
       <div class="field"><label>الأقسام المستشارة أولاً (تُعرض عليها قبل القسم النهائي)</label>
         <select name="consult_departments" id="consultDeptsSel" multiple size="6" onchange="syncConsultOptions()">
@@ -2326,6 +2343,7 @@ function getAvailableActions(r) {
   const forms = [];
 
   for (const to of allowed) {
+    if (to === 'cancelled') continue;
     if (isConsul && to === 'doctor_accepted') continue;
     if (!isConsul && to === 'consultation_done') continue;
     if (to === 'awaiting_bed' && skipBeds) continue;
@@ -2373,13 +2391,13 @@ function renderCombinedDoctorForm(r) {
     <form onsubmit="executeCombinedDoctorAction(event,'${r.id}')" data-ref-id="${r.id}">
       <div class="grid2">
         <div class="field full"><label>اختر الإجراء *</label>
-          <select name="action_type" id="doctor-action-type" required onchange="onDoctorActionChange(this)">
-            <option value="">— اختر —</option>
-            <option value="doctor_accepted">${isFinal ? '✓ قبول نهائي' : '✓ قبول الإحالة'}</option>
-            <option value="doctor_rejected">${isFinal ? '✕ رفض نهائي' : '✕ رفض الإحالة'}</option>
-            <option value="info_requested">📝 طلب استكمال</option>
-            ${isConsul && !isFinal ? '<option value="consultation_done">📋 استشارة طبية (إرسال للمنسق)</option>' : ''}
-          </select>
+          <input name="action_type" id="doctor-action-type" list="doctor-action-options" required placeholder="اكتب الإجراء أو اختر من القائمة" oninput="onDoctorActionChange(this)">
+          <datalist id="doctor-action-options">
+            <option value="doctor_accepted">${isFinal ? 'قبول نهائي' : 'قبول الإحالة'}</option>
+            <option value="doctor_rejected">${isFinal ? 'رفض نهائي' : 'رفض الإحالة'}</option>
+            <option value="info_requested">طلب مزيد من المعلومات</option>
+            ${isConsul && !isFinal ? '<option value="consultation_done">استشارة طبية</option>' : ''}
+          </datalist>
         </div>
         <div id="doctor-action-fields" class="full"></div>
       </div>
@@ -2420,7 +2438,7 @@ function onDoctorActionChange(sel) {
   const wrapper = $('doctor-action-fields');
   const submitBtn = $('doctor-action-submit');
   if (!wrapper || !submitBtn) return;
-  const v = sel.value;
+  const v = normalizeDoctorAction(sel.value);
   if (!v) {
     wrapper.innerHTML = ''; submitBtn.disabled = true; submitBtn.className = 'primary';
     submitBtn.style.opacity = '.5'; submitBtn.style.background = '';
@@ -2430,7 +2448,7 @@ function onDoctorActionChange(sel) {
 
   const form = sel.closest('form'); const refId = form?.dataset.refId;
   const ref = refId ? DATA.referrals.find(x => x.id === refId) : null;
-  const mobileVal = ref?.doctor_mobile || '';
+  const mobileVal = CURRENT_USER.mobile || DEFAULT_MOBILES[CURRENT_USER.username] || ref?.doctor_mobile || '';
   const priority = ref?.priority || '';
 
   if (v === 'doctor_accepted') {
@@ -2440,8 +2458,8 @@ function onDoctorActionChange(sel) {
     const meta = REFERRAL_TYPE_META[priority];
     wrapper.innerHTML = `
       ${meta ? `<div class="field full"><div class="notice info" style="margin:0">✓ القبول كـ: <b>${meta.admission}</b>${needWard ? ' — اختر القسم' : ''}</div></div>` : ''}
-      ${needWard ? `<div class="field full"><label>القسم *</label><select name="ward_type" required><option value="">— اختر —</option>${wardOptions.map(o => `<option value="${esc(o)}">${esc(o)}</option>`).join('')}</select></div>` : `<input type="hidden" name="ward_type" value="">`}
-      <div class="field full"><label>الجوال</label><input name="doctor_mobile" type="tel" value="${esc(mobileVal)}"></div>
+      ${priority === 'طارئ' ? `<div class="field full"><label>قبول الطوارئ؟ *</label><select name="emergency_accept" required onchange="onEmergencyDecisionChange(this)"><option value="">— اختر —</option><option value="نعم">نعم — قبول طوارئ مباشر</option><option value="لا">لا — رفض الطوارئ</option></select></div><div id="emergency-decision-fields" class="field full"></div>` : (needWard ? `<div class="field full"><label>القسم / نوع السرير *</label><input name="ward_type" list="bed-type-options" required placeholder="اكتب نوع السرير أو اختره"><datalist id="bed-type-options">${BED_TYPE_OPTIONS.map(o => `<option value="${esc(o)}">`).join('')}</datalist></div>` : `<input type="hidden" name="ward_type" value="">`)}
+      <div class="field full"><label>الجوال المسجل للطبيب</label><input type="tel" value="${esc(mobileVal)}" readonly aria-readonly="true"><input type="hidden" name="doctor_mobile" value="${esc(mobileVal)}"></div>
       <div class="field full"><label>ردك *</label><textarea name="notes" required style="min-height:110px"></textarea></div>`;
   } else if (v === 'doctor_rejected') {
     submitBtn.className = 'danger'; submitBtn.textContent = '✕ تنفيذ الرفض';
@@ -2462,17 +2480,42 @@ function onDoctorActionChange(sel) {
       <div class="field full"><label>التوصيات *</label><textarea name="consultation_recommendations" required style="min-height:130px"></textarea></div>
       <div class="field full"><label>متابعة؟</label><select name="consultation_followup"><option>لا</option><option>نعم — عيادة خارجية</option><option>نعم — بعد أسبوع</option><option>نعم — بعد شهر</option><option>نعم — حسب الحالة</option></select></div>
       <div class="field full"><label>ملاحظات</label><textarea name="consultation_notes"></textarea></div>
-      <div class="field full"><label>الجوال</label><input name="doctor_mobile" type="tel" value="${esc(mobileVal)}"></div>`;
+      <div class="field full"><label>الجوال المسجل للطبيب</label><input type="tel" value="${esc(mobileVal)}" readonly aria-readonly="true"><input type="hidden" name="doctor_mobile" value="${esc(mobileVal)}"></div>`;
   }
+}
+
+function normalizeDoctorAction(value) {
+  const v = String(value || '').trim();
+  return ({
+    'قبول نهائي': 'doctor_accepted', 'قبول الإحالة': 'doctor_accepted',
+    'رفض نهائي': 'doctor_rejected', 'رفض الإحالة': 'doctor_rejected',
+    'طلب مزيد من المعلومات': 'info_requested', 'طلب استكمال': 'info_requested',
+    'استشارة طبية': 'consultation_done'
+  })[v] || v;
+}
+
+function onEmergencyDecisionChange(sel) {
+  const box = $('emergency-decision-fields');
+  if (!box) return;
+  if (sel.value === 'نعم') {
+    box.innerHTML = '<div class="notice success" style="margin:0">سيتم إرسال قبول الطوارئ مباشرة إلى المنسق للطباعة، ولن تظهر لإدارة الأسرة.</div><input type="hidden" name="ward_type" value="طوارئ">';
+  } else if (sel.value === 'لا') {
+    box.innerHTML = '<div class="field"><label>سبب رفض الطوارئ *</label><textarea name="emergency_rejection_reason" required style="min-height:90px"></textarea></div><input type="hidden" name="ward_type" value="طوارئ">';
+  } else box.innerHTML = '';
 }
 
 function executeCombinedDoctorAction(e, id) {
   e.preventDefault();
   const fd = new FormData(e.target);
-  const to = fd.get('action_type');
+  const ref = DATA.referrals.find(x => x.id === id);
+  let to = normalizeDoctorAction(fd.get('action_type'));
   if (!to) return toast('اختر الإجراء', 'err');
   const payload = {};
   for (const [k, v] of fd.entries()) if (k !== 'action_type') payload[k] = v;
+  if (ref?.priority === 'طارئ' && to === 'doctor_accepted' && payload.emergency_accept === 'لا') {
+    to = 'doctor_rejected';
+    payload.reason = payload.emergency_rejection_reason || '';
+  }
   const result = transitionReferral(id, to, payload);
   if (!result.ok) return toast(result.error, 'err');
   closeModal();
@@ -2528,21 +2571,67 @@ function renderBedManagement() {
   const beds = DATA.beds;
   const free = beds.filter(b => b.available).length;
   const busy = beds.length - free;
+  const canEdit = ['admin', 'beds'].includes(CURRENT_USER.role);
   const cards = beds.map(b => {
     const refer = b.current_referral ? DATA.referrals.find(r => r.id === b.current_referral) : null;
     return `<div class="bed-card ${b.available ? 'free' : 'busy'}">
-      <strong>${esc(b.number)}</strong><small>${esc(b.type)} — ${esc(b.ward)}</small>
-      <div class="badge"><span class="pill ${b.available ? 'p-done' : 'p-r'}">${b.available ? 'شاغر' : 'مشغول'}</span></div>
+      <strong>${esc(b.number || '—')}</strong><small>${esc(b.type || '—')} — ${esc(b.ward || '—')}</small>
+      <div class="badge"><span class="pill ${b.available ? 'p-done' : 'p-r'}">${b.available ? 'متوفر' : 'غير متوفر'}</span></div>
+      <small>دخول: ${esc(b.admission_date || '—')} — قبول: ${esc(b.acceptance_date || '—')}</small>
+      <small>مدة الحجز: ${esc(b.reservation_duration || b.duration || '—')}</small>
+      ${b.employee_name ? `<small>موثق بواسطة: ${esc(b.employee_name)}</small>` : ''}
       ${refer ? `<small style="margin-top:8px;display:block;color:var(--navy);font-weight:600">${esc(refer.patient_name)}</small>` : ''}
+      ${canEdit ? `<button class="secondary xs" style="margin-top:8px" onclick="openBedRecordForm('${esc(b.id)}')">✏ تعديل السجل</button>` : ''}
     </div>`;
   }).join('');
   $('content').innerHTML = `
+    <div class="ph"><div><h2>🛏 إدارة الأسرّة</h2><p>نموذج موحد لتوثيق توفر السرير وبيانات الدخول والقبول</p></div>${canEdit ? '<button class="primary" onclick="openBedRecordForm()">＋ إضافة سجل سرير</button>' : ''}</div>
     <div class="stats">
-      <div class="stat"><label>إجمالي</label><strong>${beds.length}</strong></div>
-      <div class="stat"><label>شاغرة</label><strong style="color:#16734e">${free}</strong></div>
-      <div class="stat"><label>مشغولة</label><strong style="color:#b43f3f">${busy}</strong></div>
+      <div class="stat"><label>إجمالي السجلات</label><strong>${beds.length}</strong></div>
+      <div class="stat"><label>متوفرة</label><strong style="color:#16734e">${free}</strong></div>
+      <div class="stat"><label>غير متوفرة</label><strong style="color:#b43f3f">${busy}</strong></div>
     </div>
-    <div class="panel"><h3>حالة الأسرة</h3><div class="bed-grid">${cards}</div></div>`;
+    <div class="panel"><h3>حالة الأسرّة والسجلات المعتمدة</h3><div class="bed-grid">${cards || '<div class="empty">لا توجد سجلات أسرّة</div>'}</div></div>`;
+}
+
+function openBedRecordForm(id) {
+  if (!['admin', 'beds'].includes(CURRENT_USER.role)) return toast('غير مصرح', 'err');
+  const b = id ? DATA.beds.find(x => x.id === id) : null;
+  if (id && !b) return toast('سجل السرير غير موجود', 'err');
+  const employeeName = CURRENT_USER.full_name;
+  const employeeId = CURRENT_USER.username;
+  $('modalRoot').innerHTML = `<div class="modal-back" onclick="if(event.target===this)closeModal()"><div class="modal" style="max-width:680px"><div class="mh"><h3>🛏 ${b ? 'تعديل سجل السرير' : 'إضافة سجل سرير'}</h3><button class="ghost sm" onclick="closeModal()">✕</button></div>
+    <form class="grid2" onsubmit="saveBedRecord(event,'${b ? esc(b.id) : ''}')">
+      <div class="field"><label>توفر السرير *</label><select name="available" required><option value="نعم" ${!b || b.available ? 'selected' : ''}>نعم</option><option value="لا" ${b && !b.available ? 'selected' : ''}>لا</option></select></div>
+      <div class="field"><label>نوع السرير *</label><select name="type" required>${BED_TYPE_OPTIONS.map(x => `<option value="${esc(x)}" ${b?.type === x ? 'selected' : ''}>${esc(x)}</option>`).join('')}</select></div>
+      <div class="field"><label>القسم *</label><input name="ward" value="${esc(b?.ward || '')}" required placeholder="اكتب القسم"></div>
+      <div class="field"><label>رقم الغرفة *</label><input name="number" value="${esc(b?.number || '')}" required></div>
+      <div class="field"><label>تاريخ دخول المريض</label><input type="date" name="admission_date" value="${esc(b?.admission_date || '')}"></div>
+      <div class="field"><label>تاريخ القبول</label><input type="date" name="acceptance_date" value="${esc(b?.acceptance_date || '')}"></div>
+      <div class="field"><label>مدة حجز السرير</label><input name="reservation_duration" value="${esc(b?.reservation_duration || b?.duration || '')}" placeholder="مثال: 6 ساعات، 3 أيام"></div>
+      <div class="field"><label>الموظف الموثق</label><input value="${esc(employeeName)} — ${esc(employeeId)}" readonly aria-readonly="true"><input type="hidden" name="employee_id" value="${esc(employeeId)}"><input type="hidden" name="employee_name" value="${esc(employeeName)}"></div>
+      <div class="field full"><label>ملاحظات</label><textarea name="notes" placeholder="ملاحظات إضافية">${esc(b?.notes || '')}</textarea></div>
+      <div class="full"><button class="primary" type="submit" style="width:100%">💾 حفظ سجل السرير</button></div>
+    </form></div></div>`;
+}
+
+function saveBedRecord(e, id) {
+  e.preventDefault();
+  if (!['admin', 'beds'].includes(CURRENT_USER.role)) return toast('غير مصرح', 'err');
+  const d = Object.fromEntries(new FormData(e.target));
+  const duplicate = DATA.beds.find(x => x.number === d.number && x.id !== id);
+  if (duplicate) return toast('رقم الغرفة مستخدم في سجل آخر', 'err');
+  const existing = id ? DATA.beds.find(x => x.id === id) : null;
+  const bed = existing || { id: uid(), current_patient: null, current_referral: null, updated_at: nowIso() };
+  Object.assign(bed, {
+    number: d.number.trim(), type: d.type, ward: d.ward.trim(), available: d.available === 'نعم',
+    admission_date: d.admission_date || '', acceptance_date: d.acceptance_date || '',
+    reservation_duration: d.reservation_duration || '', duration: d.reservation_duration || '', notes: d.notes || '',
+    employee_id: CURRENT_USER.username, employee_name: CURRENT_USER.full_name, updated_at: nowIso()
+  });
+  if (!existing) DATA.beds.push(bed);
+  saveData(); audit(existing ? 'bed_record_updated' : 'bed_record_created', 'bed', bed.id, bed.number);
+  closeModal(); toast('✓ تم حفظ سجل السرير', 'ok'); renderBedManagement();
 }
 
 // ═══════════════════════════════════════════════════════════════════
@@ -3298,16 +3387,23 @@ function resetAll() {
     ensureChatShiftsData();
     try { await openAttsDB(); } catch (dbErr) { console.warn('[WASL] IndexedDB:', dbErr.message); }
     preloadLogos().catch(e => console.warn('[WASL] Logo preload:', e));
-    const sess = sessionStorage.getItem(SESSION_KEY);
+    const sess = localStorage.getItem(SESSION_KEY) || sessionStorage.getItem(SESSION_KEY);
     if (sess) {
       try {
         const s = JSON.parse(sess);
         if (Date.now() < s.exp) {
           const user = DATA.users.find(x => x.id === s.userId);
-          if (user && user.active && !user.pending_approval && !user.rejected) { CURRENT_USER = user; enterApp(); return; }
+          if (user && user.active && !user.pending_approval && !user.rejected) {
+            const normalized = JSON.stringify({ userId: user.id, exp: s.exp });
+            localStorage.setItem(SESSION_KEY, normalized);
+            sessionStorage.setItem(SESSION_KEY, normalized);
+            CURRENT_USER = user; enterApp(); return;
+          }
         }
       } catch (e) {}
     }
+    localStorage.removeItem(SESSION_KEY);
+    sessionStorage.removeItem(SESSION_KEY);
     btn.disabled = false; btnText.textContent = 'دخول';
   } catch (e) {
     errEl.innerHTML = `<b>فشل التهيئة</b><br>${esc(e.message)}`;
