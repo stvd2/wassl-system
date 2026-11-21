@@ -179,6 +179,16 @@ table.t tr:hover td{background:#fafcfc}
 .chat-empty .icon{font-size:64px;opacity:.4;margin-bottom:12px}
 .chat-back-btn{display:none}
 
+html[dir="ltr"] body{direction:ltr}
+html[dir="ltr"] .offline-badge{left:auto;right:8px}
+html[dir="ltr"] aside{border-left:0;border-right:1px solid var(--line)}
+html[dir="ltr"] .nav{text-align:left}
+html[dir="ltr"] .nav .count{margin-left:auto;margin-right:0}
+html[dir="ltr"] .notif-btn .badge{right:auto;left:-4px}
+html[dir="ltr"] .toast{left:auto;right:20px}
+html[dir="ltr"] table.t th,html[dir="ltr"] table.t td{text-align:left}
+input[dir="ltr"],select[dir="ltr"],textarea[dir="ltr"],.ltr{direction:ltr;text-align:left}
+
 /* ═══════ المناوبون ═══════ */
 .oncall-banner{background:linear-gradient(135deg,#087f78,#0b9b91);color:#fff;padding:14px 18px;border-radius:12px;margin-bottom:16px;display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px;box-shadow:var(--shadow)}
 .oncall-banner h4{margin:0;font-size:14px;display:flex;align-items:center;gap:8px}
@@ -259,6 +269,7 @@ table.t tr:hover td{background:#fafcfc}
   <header class="top">
     <div class="tl"><div class="mini">و</div><div><strong style="color:var(--navy);font-size:19px">وَصْل</strong><small style="display:block;color:var(--muted);font-size:11px">نظام إدارة الإحالات الطبية</small></div></div>
     <div class="ur">
+      <button class="ghost xs" onclick="syncNow()" title="مزامنة الآن">🔄</button>
       <button class="notif-btn" onclick="showPage('notifications')" title="الإشعارات">🔔<span class="badge hidden" id="notifBadge">0</span></button>
       <button class="ghost sm" onclick="showChangePassword(false)" title="تغيير كلمة المرور">🔑</button>
       <div style="text-align:left"><div id="userName" style="font-weight:700;font-size:13px">—</div><div id="userRole" style="color:var(--muted);font-size:11px">—</div></div>
@@ -284,6 +295,8 @@ const SESSION_KEY = 'wasl_session_v6';
 const LOGO_STORAGE_KEY = 'wasl_logos_cache_v1';
 // عنوان الخادم الوسيط (Node/Express + Supabase) — يمكن تجاوزه عبر window.WASL_API_BASE
 const API_BASE = (window.WASL_API_BASE || '').replace(/\/$/, '');
+const API_STATE = API_BASE + '/api/state';
+const API_IMPORT = API_BASE + '/api/import';
 const SUPABASE_PUBLIC_URL = 'https://rtnzxmedlmymtgyzgmhp.supabase.co';
 const SUPABASE_PUBLISHABLE_KEY = 'sb_publishable_mROaMe2BCRBDcwkxExZgRQ_kMTpL2E1';
 let DATA = null;
@@ -294,6 +307,9 @@ let CHAT_TAB = 'direct';
 let REALTIME_CHANNEL = null;
 let REALTIME_REFRESH_TIMER = null;
 let REALTIME_REFRESHING = false;
+const SYNC_CHANNEL = ('BroadcastChannel' in window) ? new BroadcastChannel('wasl_v9_sync_channel') : null;
+let LOCAL_CHANGE_AT = '';
+let LAST_REMOTE_REVISION = 0;
 let LIST_PAGE = 1;
 const LIST_PAGE_SIZE = 10;
 let LIST_QUERY = '';
@@ -308,6 +324,11 @@ async function refreshFromRealtime() {
   try {
     const next = await loadData();
     if (!next) return;
+    const remoteRevision = Number(next.meta?.sync_revision || 0);
+    const localRevision = Number(DATA?.meta?.sync_revision || 0);
+    const remoteAt = String(next.meta?.local_updated_at || '');
+    const localAt = String(DATA?.meta?.local_updated_at || LOCAL_CHANGE_AT || '');
+    if (remoteRevision < localRevision || (remoteRevision === localRevision && remoteAt && localAt && remoteAt < localAt)) return;
     DATA = next;
     if (CURRENT_USER) {
       const user = DATA.users.find(x => x.id === CURRENT_USER.id);
@@ -773,7 +794,7 @@ async function loadData() {
   const timeout = setTimeout(() => controller.abort(), 12000);
   let res;
   try {
-    res = await fetch(API_BASE + '/api/state', { cache: 'no-store', signal: controller.signal });
+    res = await fetch(API_STATE, { cache: 'no-store', signal: controller.signal });
   } catch (e) {
     if (e?.name === 'AbortError') throw new Error('انتهت مهلة الاتصال بالخادم (12 ثانية)');
     throw new Error('تعذر الاتصال بالخادم');
@@ -787,6 +808,8 @@ async function loadData() {
     throw new Error('البيانات المشتركة في الخادم غير صالحة أو بإصدار غير مدعوم');
   }
   if (!Number.isInteger(p.meta.sync_revision) || p.meta.sync_revision < 0) p.meta.sync_revision = 0;
+  LAST_REMOTE_REVISION = p.meta.sync_revision;
+  LOCAL_CHANGE_AT = p.meta.local_updated_at || '';
   _syncBlocked = false;
   try { localStorage.setItem(STORAGE_KEY, JSON.stringify(p)); } catch (e) {}
   return p;
@@ -795,11 +818,12 @@ async function loadData() {
 let _saveTimer = null;
 let _saveInFlight = Promise.resolve();
 let _syncBlocked = false;
+let _syncQueued = false;
 async function pushStateSnapshot() {
   if (_syncBlocked || !DATA?.meta) return;
   if (!Number.isInteger(DATA.meta.sync_revision)) DATA.meta.sync_revision = 0;
   const snapshot = JSON.parse(JSON.stringify(DATA));
-  const res = await fetch(API_BASE + '/api/state', {
+  const res = await fetch(API_STATE, {
     method: 'PUT',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(snapshot),
@@ -813,6 +837,7 @@ async function pushStateSnapshot() {
   if (!res.ok) throw new Error(`فشل حفظ البيانات (${res.status})`);
   const result = await res.json();
   if (result?.data?.meta && DATA.meta.sync_revision === snapshot.meta.sync_revision) {
+    LAST_REMOTE_REVISION = Number(result.data.meta.sync_revision || result.revision || LAST_REMOTE_REVISION);
     DATA.meta.sync_revision = result.data.meta.sync_revision;
     try { localStorage.setItem(STORAGE_KEY, JSON.stringify(DATA)); } catch (e) {}
   }
@@ -820,15 +845,82 @@ async function pushStateSnapshot() {
 function syncToBackend() {
   if (_saveTimer) clearTimeout(_saveTimer);
   _saveTimer = setTimeout(() => {
+    _saveTimer = null;
+    _syncQueued = true;
     _saveInFlight = _saveInFlight
-      .then(pushStateSnapshot)
+      .then(async () => { while (_syncQueued) { _syncQueued = false; await pushStateSnapshot(); } })
       .catch(e => { console.error('[WASL] sync:', e); toast('تعذر مزامنة التعديل مع الخادم. أعد المحاولة عند عودة الاتصال.', 'err'); });
   }, 400);
 }
 
 function saveData() {
-  try { localStorage.setItem(STORAGE_KEY, JSON.stringify(DATA)); syncToBackend(); return true; }
+  try {
+    if (!DATA?.meta) return false;
+    DATA.meta.local_updated_at = nowIso();
+    LOCAL_CHANGE_AT = DATA.meta.local_updated_at;
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(DATA));
+    if (SYNC_CHANNEL) SYNC_CHANNEL.postMessage({ type: 'state_updated', source: 'local', ts: LOCAL_CHANGE_AT, revision: DATA.meta.sync_revision || 0, data: DATA });
+    syncToBackend();
+    return true;
+  }
   catch (e) { toast('فشل الحفظ: ' + e.message, 'err'); return false; }
+}
+
+function acceptLocalSync(candidate, source = 'local') {
+  if (!candidate || typeof candidate !== 'object' || !candidate.meta || candidate.meta.version !== 'v6') return false;
+  const incomingRevision = Number(candidate.meta.sync_revision || 0);
+  const currentRevision = Number(DATA?.meta?.sync_revision || 0);
+  const incomingAt = String(candidate.meta.local_updated_at || '');
+  const currentAt = String(DATA?.meta?.local_updated_at || LOCAL_CHANGE_AT || '');
+  if (incomingRevision < currentRevision) return false;
+  if (incomingRevision === currentRevision && incomingAt && currentAt && incomingAt <= currentAt) return false;
+  DATA = candidate;
+  LOCAL_CHANGE_AT = incomingAt;
+  try { localStorage.setItem(STORAGE_KEY, JSON.stringify(DATA)); } catch (e) {}
+  if (CURRENT_USER) {
+    const me = DATA.users.find(u => u.id === CURRENT_USER.id);
+    if (me) CURRENT_USER = me;
+    buildNav();
+    try { showPage(PAGE); } catch (e) { console.warn('[WASL] view refresh:', e); }
+  }
+  if (source !== 'server') toast(LANG === 'ar' ? 'تم تحديث البيانات من تبويب آخر' : 'Data updated from another tab', 'ok');
+  return true;
+}
+
+if (SYNC_CHANNEL) {
+  SYNC_CHANNEL.onmessage = event => {
+    const message = event?.data;
+    if (!message || message.type !== 'state_updated' || !message.data) return;
+    acceptLocalSync(message.data, 'broadcast');
+  };
+}
+window.addEventListener('storage', event => {
+  if (event.key !== STORAGE_KEY || !event.newValue) return;
+  try { acceptLocalSync(JSON.parse(event.newValue), 'storage'); } catch (e) {}
+});
+
+async function syncNow() {
+  try {
+    const remote = await loadData();
+    if (!remote) throw new Error('لا توجد نسخة خادم صالحة');
+    const remoteRevision = Number(remote.meta?.sync_revision || 0);
+    const localRevision = Number(DATA?.meta?.sync_revision || 0);
+    const remoteAt = String(remote.meta?.local_updated_at || '');
+    const localAt = String(DATA?.meta?.local_updated_at || LOCAL_CHANGE_AT || '');
+    if (remoteRevision > localRevision || (remoteRevision === localRevision && remoteAt >= localAt) || !DATA?.meta?.local_updated_at) {
+      DATA = remote;
+      try { localStorage.setItem(STORAGE_KEY, JSON.stringify(DATA)); } catch (e) {}
+      _syncBlocked = false;
+      if (CURRENT_USER) showPage(PAGE);
+      toast('✓ تمت المزامنة مع الخادم', 'ok');
+    } else {
+      _syncBlocked = false;
+      syncToBackend();
+      toast('توجد تعديلات محلية أحدث؛ جاري رفعها', 'warn');
+    }
+  } catch (e) {
+    toast('تعذرت المزامنة: ' + e.message, 'err');
+  }
 }
 function initData() {
   return {
@@ -1696,6 +1788,7 @@ function buildNav() {
     items.push({ id: 'bed_management', icon: '🛏', label: 'إدارة الأسرة' });
     items.push({ id: 'users', icon: '👥', label: 'المستخدمون', count: pendingCount });
     items.push({ id: 'audit', icon: '📋', label: 'سجل التدقيق' });
+    items.push({ id: 'db_monitor', icon: '💾', label: 'مراقبة القاعدة والمزامنة' });
   }
 
   const chatUnread = getTotalUnreadChats();
@@ -1750,6 +1843,7 @@ function showPage(p) {
     bed_management:['إدارة الأسرة','حالة كل سرير'],
     users:['المستخدمون','إدارة الحسابات'],
     audit:['سجل التدقيق','كل العمليات'],
+    db_monitor:['مراقبة القاعدة والمزامنة','حالة الخادم والنسخة المحلية وتبادل JSON'],
     notifications:['الإشعارات','التنبيهات']
   };
   const [t, s] = T[p] || ['—', ''];
@@ -1768,6 +1862,7 @@ function renderPage(p) {
   if (p === 'create') return renderCreate();
   if (p === 'users') return renderUsers();
   if (p === 'audit') return renderAudit();
+  if (p === 'db_monitor') return renderDbMonitor();
   if (p === 'bed_management') return renderBedManagement();
   if (p === 'notifications') return renderNotifications();
   return renderList(p);
@@ -2432,6 +2527,52 @@ function markAllRead() {
   saveData();
   renderNotifications();
   buildNav();
+}
+
+function exportStateJson() {
+  if (CURRENT_USER?.role !== 'admin') return toast('التصدير متاح لمدير النظام فقط', 'err');
+  const snapshot = JSON.parse(JSON.stringify(DATA || {}));
+  snapshot.meta = { ...(snapshot.meta || {}), exported_at: nowIso(), export_source: 'wasl-v9-db-monitor' };
+  const blob = new Blob([JSON.stringify(snapshot, null, 2)], { type: 'application/json;charset=utf-8' });
+  const url = URL.createObjectURL(blob), a = document.createElement('a');
+  a.href = url; a.download = `wasl-v9-backup-${new Date().toISOString().replace(/[:.]/g, '-')}.json`;
+  document.body.appendChild(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(url), 1000);
+  audit('state_exported', 'system', 'main', `revision ${snapshot.meta.sync_revision || 0}`);
+  toast('✓ تم تصدير نسخة JSON محلية', 'ok');
+}
+
+function chooseStateImport() {
+  if (CURRENT_USER?.role !== 'admin') return toast('الاستيراد متاح لمدير النظام فقط', 'err');
+  const input = document.createElement('input'); input.type = 'file'; input.accept = 'application/json,.json';
+  input.onchange = () => { if (input.files?.[0]) importStateJson(input.files[0]); }; input.click();
+}
+
+async function importStateJson(file) {
+  try {
+    if (file.size > 25 * 1024 * 1024) throw new Error('حجم ملف JSON يتجاوز 25 م.ب');
+    const parsed = JSON.parse(await file.text());
+    if (!parsed || Array.isArray(parsed) || parsed.meta?.version !== 'v6') throw new Error('ملف غير صالح أو إصدار غير مدعوم');
+    for (const key of ['users','referrals','beds','audit','notifications','chats','shifts']) if (!Array.isArray(parsed[key])) throw new Error(`الحقل ${key} غير صالح`);
+    if (!parsed.attachments || typeof parsed.attachments !== 'object' || Array.isArray(parsed.attachments)) parsed.attachments = {};
+    const revision = Number(parsed.meta.sync_revision || 0);
+    if (!Number.isInteger(revision) || revision < 0) throw new Error('إصدار المزامنة غير صالح');
+    if (!confirm('سيتم إرسال هذه النسخة إلى الخادم واستبدال الحالة الحالية بشكل ذري. لن يُنفذ DELETE أو تصفير تلقائي. هل تريد المتابعة؟')) return;
+    const res = await fetch(API_IMPORT, { method: 'POST', cache: 'no-store', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(parsed) });
+    const body = await res.json().catch(() => ({}));
+    if (res.status === 409) throw new Error('تعارض: توجد نسخة أحدث على الخادم. نفّذ مزامنة ثم أعد المحاولة.');
+    if (!res.ok || !body?.data) throw new Error(body?.error || `فشل الاستيراد (${res.status})`);
+    DATA = body.data; LAST_REMOTE_REVISION = Number(DATA.meta?.sync_revision || body.revision || 0); LOCAL_CHANGE_AT = DATA.meta?.local_updated_at || ''; _syncBlocked = false;
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(DATA));
+    toast('✓ تم استيراد النسخة إلى الخادم بنجاح', 'ok'); showPage('db_monitor');
+  } catch (e) { toast('تعذر الاستيراد: ' + e.message, 'err'); }
+}
+
+function renderDbMonitor() {
+  if (CURRENT_USER?.role !== 'admin') return showPage('dashboard');
+  const sizeKb = (new Blob([JSON.stringify(DATA || {})]).size / 1024).toFixed(1);
+  const rows = [['الإحالات', DATA.referrals.length],['المستخدمون', DATA.users.length],['الأسرة', DATA.beds.length],['المحادثات', DATA.chats.length],['المناوبات', DATA.shifts.length],['بيانات المرفقات', Object.keys(DATA.attachments || {}).length],['سجل التدقيق', DATA.audit.length],['الإشعارات', DATA.notifications.length]];
+  $('content').innerHTML = `<div class="stats"><div class="stat"><label>إصدار الخادم</label><strong>${Number(DATA.meta?.sync_revision || 0)}</strong></div><div class="stat"><label>حجم JSON المحلي</label><strong>${sizeKb} KB</strong></div><div class="stat"><label>حالة المزامنة</label><strong>${_syncBlocked ? 'متعارضة' : 'Supabase'}</strong></div><div class="stat"><label>آخر تعديل محلي</label><strong style="font-size:12px;direction:ltr">${esc(DATA.meta?.local_updated_at || '—')}</strong></div></div>
+    <div class="panel"><h3>📡 مراقبة القاعدة والمزامنة</h3><div class="notice info">المصدر المشترك هو Supabase عبر <b>/api/state</b>. تتم مزامنة التبويبات عبر BroadcastChannel وlocalStorage. لا يتم حذف أو تصفير قاعدة الإنتاج من هذه الشاشة.</div><div style="display:flex;gap:8px;flex-wrap:wrap"><button class="primary" onclick="syncNow()">🔄 مزامنة الآن</button><button class="secondary" onclick="exportStateJson()">⬇ تصدير JSON</button><button class="warn" onclick="chooseStateImport()">⬆ استيراد JSON إلى الخادم</button></div><div class="twrap" style="margin-top:16px"><table class="t" style="min-width:520px"><thead><tr><th>المخزن</th><th>العدد</th></tr></thead><tbody>${rows.map(([k,v]) => `<tr><td><b>${esc(k)}</b></td><td dir="ltr">${Number(v).toLocaleString('en-US')}</td></tr>`).join('')}</tbody></table></div></div>`;
 }
 
 // ═══════════════════════════════════════════════════════════════════
