@@ -49,6 +49,11 @@ async function sendJson(req, res, status, payload) {
   } else res.end(body);
 }
 
+function expectedRevision(payload) {
+  const value = payload?.meta?.sync_revision;
+  return Number.isInteger(value) && value >= 0 ? value : 0;
+}
+
 module.exports = async function handler(req, res) {
   const { method } = req;
   try {
@@ -60,10 +65,16 @@ module.exports = async function handler(req, res) {
     if (method === 'PUT' || method === 'POST') {
       const payload = req.body;
       if (!payload || typeof payload !== 'object' || Array.isArray(payload)) return sendJson(req, res, 400, { error: 'body غير صالح' });
-      const { error } = await supabase.from('app_state').upsert({ id: STATE_ID, data: payload }, { onConflict: 'id' });
+      const { data: result, error } = await supabase.rpc('save_app_state', {
+        expected_revision: expectedRevision(payload),
+        next_data: payload
+      });
       if (error) throw error;
+      if (!result?.ok) {
+        return sendJson(req, res, 409, { error: 'تعارض مزامنة: توجد نسخة أحدث على جهاز آخر', conflict: true, current_revision: result?.current_revision ?? null });
+      }
       invalidateStateCache();
-      return sendJson(req, res, 200, { ok: true });
+      return sendJson(req, res, 200, { ok: true, data: result.data, revision: result.revision });
     }
     if (method === 'DELETE') {
       const { error } = await supabase.from('app_state').delete().eq('id', STATE_ID);

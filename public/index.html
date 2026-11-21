@@ -761,6 +761,7 @@ async function loadData() {
   if (!p || !p.meta || p.meta.version !== 'v6') {
     throw new Error('البيانات المشتركة في الخادم غير صالحة أو بإصدار غير مدعوم');
   }
+  if (!Number.isInteger(p.meta.sync_revision) || p.meta.sync_revision < 0) p.meta.sync_revision = 0;
   try { localStorage.setItem(STORAGE_KEY, JSON.stringify(p)); } catch (e) {}
   return p;
 }
@@ -770,6 +771,8 @@ function syncToBackend() {
   if (_saveTimer) clearTimeout(_saveTimer);
   _saveTimer = setTimeout(async () => {
     try {
+      if (!DATA?.meta) throw new Error('حالة التطبيق غير مهيأة');
+      if (!Number.isInteger(DATA.meta.sync_revision)) DATA.meta.sync_revision = 0;
       const res = await fetch(API_BASE + '/api/state', {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
@@ -777,7 +780,16 @@ function syncToBackend() {
         cache: 'no-store',
         keepalive: true
       });
+      if (res.status === 409) {
+        toast('تعارض مزامنة: توجد تعديلات أحدث على جهاز آخر. حدّث الصفحة قبل المتابعة.', 'err');
+        return;
+      }
       if (!res.ok) throw new Error(`فشل حفظ البيانات (${res.status})`);
+      const result = await res.json();
+      if (result?.data?.meta) {
+        DATA.meta.sync_revision = result.data.meta.sync_revision;
+        try { localStorage.setItem(STORAGE_KEY, JSON.stringify(DATA)); } catch (e) {}
+      }
     } catch (e) {
       console.error('[WASL] sync:', e);
       toast('تعذر مزامنة التعديل مع الخادم. أعد المحاولة عند عودة الاتصال.', 'err');
@@ -791,7 +803,7 @@ function saveData() {
 }
 function initData() {
   return {
-    meta: { version: 'v6', created_at: nowIso(), seed_done: false, seq: 0, auditSeq: 0, notifSeq: 0 },
+    meta: { version: 'v6', sync_revision: 0, created_at: nowIso(), seed_done: false, seq: 0, auditSeq: 0, notifSeq: 0 },
     users: [], referrals: [], beds: [], audit: [], attachments: {}, notifications: [], chats: [], shifts: []
   };
 }

@@ -15,11 +15,14 @@ module.exports = async function handler(req, res) {
     if (!payload || typeof payload !== 'object' || Array.isArray(payload)) {
       return res.status(400).json({ error: 'body غير صالح' });
     }
-    const { error } = await supabase
-      .from('app_state')
-      .upsert({ id: STATE_ID, data: payload }, { onConflict: 'id' });
+    const expectedRevision = Number.isInteger(payload?.meta?.sync_revision) && payload.meta.sync_revision >= 0 ? payload.meta.sync_revision : 0;
+    const { data: result, error } = await supabase.rpc('save_app_state', {
+      expected_revision: expectedRevision,
+      next_data: payload
+    });
     if (error) throw error;
-    return res.status(200).json({ ok: true });
+    if (!result?.ok) return res.status(409).json({ error: 'تعارض مزامنة: توجد نسخة أحدث على جهاز آخر', conflict: true });
+    return res.status(200).json({ ok: true, data: result.data, revision: result.revision });
   } catch (e) {
     console.error('[WASL] /api/import:', e.message);
     return res.status(500).json({ error: e.message });
