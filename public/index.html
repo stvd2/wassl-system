@@ -230,8 +230,8 @@ table.t tr:hover td{background:#fafcfc}
 <div id="loginScreen" class="lw">
   <div class="login">
     <div class="login-logos">
-      <img src="https://res.cloudinary.com/dbahe7lxz/image/upload/v1794522494/idraaak/u3tjmxuydmvrupvn2ehw.png" alt="رؤية 2030" onerror="this.style.display='none'">
-      <img src="https://res.cloudinary.com/dbahe7lxz/image/upload/v1794522340/idraaak/dg14owr5kmstc6s4fzsl.jpg" alt="مستشفى الملك فيصل" onerror="this.style.display='none'">
+      <img src="assets/logos/vision.png" alt="رؤية 2030" onerror="this.onerror=null;this.style.display='none'">
+      <img src="assets/logos/hospital.png" alt="مستشفى الملك فيصل" onerror="this.onerror=null;this.style.display='none'">
     </div>
     <div class="brand"><div class="logo">و</div><div><h1>وَصْل</h1><p>نظام إدارة الإحالات الطبية v9.0</p></div></div>
     <h3 style="margin:0 0 4px;color:#17394b;font-size:18px">تسجيل الدخول</h3>
@@ -294,6 +294,13 @@ let CHAT_TAB = 'direct';
 let REALTIME_CHANNEL = null;
 let REALTIME_REFRESH_TIMER = null;
 let REALTIME_REFRESHING = false;
+let LIST_PAGE = 1;
+const LIST_PAGE_SIZE = 10;
+let LIST_QUERY = '';
+
+function canPrint() {
+  return ['coordinator', 'admin', 'system'].includes(CURRENT_USER?.role);
+}
 
 async function refreshFromRealtime() {
   if (REALTIME_REFRESHING) return;
@@ -342,9 +349,9 @@ function setupRealtime() {
 }
 
 const PRINT_LOGOS = {
-  hospital: 'https://res.cloudinary.com/dbahe7lxz/image/upload/v1794522340/idraaak/dg14owr5kmstc6s4fzsl.jpg',
-  makkah:   'https://res.cloudinary.com/dbahe7lxz/image/upload/v1794522445/idraaak/jbsom1jsvtdwffg0psvb.jpg',
-  vision:   'https://res.cloudinary.com/dbahe7lxz/image/upload/v1794522494/idraaak/u3tjmxuydmvrupvn2ehw.png'
+  hospital: 'assets/logos/hospital.png',
+  makkah:   'assets/logos/makkah.png',
+  vision:   'assets/logos/vision.png'
 };
 
 let LOGO_CACHE = {};
@@ -562,21 +569,39 @@ function openAttsDB() {
 }
 async function attsPut(id, blob) {
   const db = await openAttsDB();
-  return new Promise((res, rej) => {
+  await new Promise((res, rej) => {
     const tx = db.transaction('attachments', 'readwrite');
     tx.objectStore('attachments').put({ id, blob });
     tx.oncomplete = () => res();
     tx.onerror = () => rej(tx.error);
   });
+  const res = await fetch(API_BASE + '/api/attachment?id=' + encodeURIComponent(id), {
+    method: 'PUT',
+    headers: { 'Content-Type': blob.type || 'application/octet-stream' },
+    body: blob,
+    cache: 'no-store'
+  });
+  if (!res.ok) throw new Error(`فشل رفع المرفق (${res.status})`);
 }
 async function attsGet(id) {
   const db = await openAttsDB();
-  return new Promise((res, rej) => {
+  const local = await new Promise((res, rej) => {
     const tx = db.transaction('attachments', 'readonly');
     const req = tx.objectStore('attachments').get(id);
     req.onsuccess = () => res(req.result ? req.result.blob : null);
     req.onerror = () => rej(req.error);
   });
+  if (local) return local;
+  const remote = await fetch(API_BASE + '/api/attachment?id=' + encodeURIComponent(id), { cache: 'no-store' });
+  if (!remote.ok) return null;
+  const blob = await remote.blob();
+  try { await new Promise((res, rej) => {
+    const tx = db.transaction('attachments', 'readwrite');
+    tx.objectStore('attachments').put({ id, blob });
+    tx.oncomplete = () => res();
+    tx.onerror = () => rej(tx.error);
+  }); } catch (e) {}
+  return blob;
 }
 
 // ═══════════════════════════════════════════════════════════════════
@@ -762,38 +787,42 @@ async function loadData() {
     throw new Error('البيانات المشتركة في الخادم غير صالحة أو بإصدار غير مدعوم');
   }
   if (!Number.isInteger(p.meta.sync_revision) || p.meta.sync_revision < 0) p.meta.sync_revision = 0;
+  _syncBlocked = false;
   try { localStorage.setItem(STORAGE_KEY, JSON.stringify(p)); } catch (e) {}
   return p;
 }
 
 let _saveTimer = null;
+let _saveInFlight = Promise.resolve();
+let _syncBlocked = false;
+async function pushStateSnapshot() {
+  if (_syncBlocked || !DATA?.meta) return;
+  if (!Number.isInteger(DATA.meta.sync_revision)) DATA.meta.sync_revision = 0;
+  const snapshot = JSON.parse(JSON.stringify(DATA));
+  const res = await fetch(API_BASE + '/api/state', {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(snapshot),
+    cache: 'no-store'
+  });
+  if (res.status === 409) {
+    _syncBlocked = true;
+    toast('تعارض مزامنة: توجد تعديلات أحدث على جهاز آخر. حدّث الصفحة قبل المتابعة.', 'err');
+    return;
+  }
+  if (!res.ok) throw new Error(`فشل حفظ البيانات (${res.status})`);
+  const result = await res.json();
+  if (result?.data?.meta && DATA.meta.sync_revision === snapshot.meta.sync_revision) {
+    DATA.meta.sync_revision = result.data.meta.sync_revision;
+    try { localStorage.setItem(STORAGE_KEY, JSON.stringify(DATA)); } catch (e) {}
+  }
+}
 function syncToBackend() {
   if (_saveTimer) clearTimeout(_saveTimer);
-  _saveTimer = setTimeout(async () => {
-    try {
-      if (!DATA?.meta) throw new Error('حالة التطبيق غير مهيأة');
-      if (!Number.isInteger(DATA.meta.sync_revision)) DATA.meta.sync_revision = 0;
-      const res = await fetch(API_BASE + '/api/state', {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(DATA),
-        cache: 'no-store',
-        keepalive: true
-      });
-      if (res.status === 409) {
-        toast('تعارض مزامنة: توجد تعديلات أحدث على جهاز آخر. حدّث الصفحة قبل المتابعة.', 'err');
-        return;
-      }
-      if (!res.ok) throw new Error(`فشل حفظ البيانات (${res.status})`);
-      const result = await res.json();
-      if (result?.data?.meta) {
-        DATA.meta.sync_revision = result.data.meta.sync_revision;
-        try { localStorage.setItem(STORAGE_KEY, JSON.stringify(DATA)); } catch (e) {}
-      }
-    } catch (e) {
-      console.error('[WASL] sync:', e);
-      toast('تعذر مزامنة التعديل مع الخادم. أعد المحاولة عند عودة الاتصال.', 'err');
-    }
+  _saveTimer = setTimeout(() => {
+    _saveInFlight = _saveInFlight
+      .then(pushStateSnapshot)
+      .catch(e => { console.error('[WASL] sync:', e); toast('تعذر مزامنة التعديل مع الخادم. أعد المحاولة عند عودة الاتصال.', 'err'); });
   }, 400);
 }
 
@@ -1801,15 +1830,25 @@ function renderList(p) {
   if (p === 'reports') list = list.filter(r => r.status === 'completed');
   if (p === 'doctor_inbox') list = list.filter(r => isReferralInDoctorInbox(r));
   if (p === 'doctor_responded') list = list.filter(r => hasDoctorResponded(r, CURRENT_USER.id));
-  if (p === 'bed_requests') list = list.filter(r => r.status === 'awaiting_bed');
+  if (p === 'bed_requests') list = list.filter(r => r.status === 'awaiting_bed' && !isDirectER(r));
   list.sort((a, b) => new Date(b.updated_at || b.created_at) - new Date(a.updated_at || a.created_at));
 
+  const query = LIST_QUERY.trim().toLowerCase();
+  if (query) list = list.filter(r => [refNoOf(r), r.patient_name, r.mrn, r.priority, r.specialty, r.target_specialty, r.status].filter(Boolean).join(' ').toLowerCase().includes(query));
+  const totalPages = Math.max(1, Math.ceil(list.length / LIST_PAGE_SIZE));
+  LIST_PAGE = Math.min(Math.max(1, LIST_PAGE), totalPages);
+  const visible = list.slice((LIST_PAGE - 1) * LIST_PAGE_SIZE, LIST_PAGE * LIST_PAGE_SIZE);
+  const pageButtons = Array.from({length: Math.min(totalPages, 4)}, (_, i) => i + 1).map(n => `<button class=\"ghost sm\" onclick=\"setListPage(${n})\">${n}</button>`).join('');
   $('content').innerHTML = `<div class="panel">
     <h3>القائمة (${list.length})</h3>
-    <div style="margin-bottom:14px"><input class="searchbox" placeholder="بحث..." oninput="filterTable(this.value)"></div>
-    <div id="listWrap">${tableHTML(list)}</div>
+    <div style="margin-bottom:14px"><input class="searchbox" value="${esc(LIST_QUERY)}" placeholder="بحث..." oninput="setListQuery(this.value, '${p}')"></div>
+    <div id="listWrap">${tableHTML(visible)}</div>
+    ${totalPages > 1 ? `<div style="display:flex;gap:6px;align-items:center;justify-content:center;margin-top:16px;flex-wrap:wrap">${pageButtons}${totalPages > 4 ? '<span>…</span>' : ''}<button class="secondary sm" onclick="setListPage(${Math.min(totalPages, LIST_PAGE + 1)})" ${LIST_PAGE >= totalPages ? 'disabled' : ''}>التالي</button><span style="font-size:12px;color:var(--muted)">صفحة ${LIST_PAGE} من ${totalPages}</span></div>` : ''}
   </div>`;
 }
+
+function setListPage(page) { LIST_PAGE = Math.max(1, Number(page) || 1); renderList(PAGE); }
+function setListQuery(value, page) { LIST_QUERY = String(value || ''); LIST_PAGE = 1; renderList(page || PAGE); }
 
 function filterTable(q) {
   const s = q.toLowerCase();
@@ -2136,9 +2175,7 @@ function getAvailableActions(r) {
 
   const printableStates = ['doctor_rejected', 'info_requested', 'bed_approved', 'bed_rejected', 'completed', 'cancelled', 'consultation_done'];
   if (from === 'doctor_accepted' && skipBeds) printableStates.push('doctor_accepted');
-  const hidePrintForDoctor = CURRENT_USER.role === 'doctor' && isConsul;
-
-  if (printableStates.includes(from) && !hidePrintForDoctor) {
+  if (printableStates.includes(from) && canPrint()) {
     if (from === 'consultation_done') forms.unshift({ to: 'print', label: '🖨️ طباعة نموذج الاستشارة', btn: 'primary', icon: '🖨' });
     else forms.push({ to: 'print', label: '🖨️ طباعة النموذج', btn: 'primary', icon: '🖨' });
   }
@@ -2283,7 +2320,7 @@ function executeCombinedDoctorAction(e, id) {
 
 function renderActionForm(r, action) {
   if (action.to === 'print') {
-    if (CURRENT_USER.role === 'doctor' && isConsultation(r)) return '';
+    if (!canPrint()) return '';
     const isConsulPrint = isConsultation(r);
     const label = isConsulPrint ? '🖨️ طباعة نموذج الاستشارة' : '🖨️ طباعة النموذج';
     if (isConsulPrint) return `<div class="action-form" style="background:#F1F5F6;border-color:#5A727A"><button class="primary" style="background:#5A727A;width:100%;padding:14px" onclick="openPrint('${r.id}')">${label}</button></div>`;
@@ -2401,6 +2438,7 @@ function markAllRead() {
 // الطباعة
 // ═══════════════════════════════════════════════════════════════════
 async function openPrint(id) {
+  if (!canPrint()) return toast('الطباعة متاحة للمنسق ومدير النظام فقط', 'err');
   const r = DATA.referrals.find(x => x.id === id);
   if (!r) return toast('غير موجود', 'err');
   const w = window.open('', '_blank');
@@ -2496,9 +2534,9 @@ function buildPrintDocument(tpl, d) {
   const T = getPrintTitle(tpl);
 
   const header = `<header class="print-header">
-    <div class="header-col-right"><img src="${logoSrc('hospital')}" class="img-hosp" alt="مستشفى الملك فيصل" onerror="this.style.display='none'"></div>
-    <div class="header-col-center"><img src="${logoSrc('makkah')}" class="img-ehalati" alt="تجمع مكة الصحي" onerror="this.style.display='none'"></div>
-    <div class="header-col-left"><img src="${logoSrc('vision')}" class="img-vision" alt="رؤية 2030" onerror="this.style.display='none'"></div>
+    <div class="header-col-right"><img src="${logoSrc('hospital')}" class="img-hosp" alt="مستشفى الملك فيصل" onerror="this.onerror=null;this.style.display='none'"></div>
+    <div class="header-col-center"><img src="${logoSrc('makkah')}" class="img-ehalati" alt="تجمع مكة الصحي" onerror="this.onerror=null;this.style.display='none'"></div>
+    <div class="header-col-left"><img src="${logoSrc('vision')}" class="img-vision" alt="رؤية 2030" onerror="this.onerror=null;this.style.display='none'"></div>
   </header>`;
 
   const topBar = `<div class="doc-title-main">${escH(T.ar)}</div>
@@ -2987,13 +3025,14 @@ function submitAddShift(e) {
 }
 
 function resetAll() {
-  if (!confirm('⚠ سيتم حذف كل البيانات')) return;
+  if (!CURRENT_USER || CURRENT_USER.role !== 'admin') return toast('تصفير النظام متاح لمدير النظام فقط', 'err');
+  if (!confirm('⚠ سيتم مسح النسخة المحلية فقط. لا يتم حذف قاعدة الإنتاج من المتصفح. هل تريد المتابعة؟')) return;
+  if (!confirm('تأكيد أخير: مسح الجلسة والبيانات المحلية لهذا الجهاز؟')) return;
   localStorage.removeItem(STORAGE_KEY);
   localStorage.removeItem(LOGO_STORAGE_KEY);
   localStorage.removeItem(OBF_KEY_STORE);
   sessionStorage.removeItem(SESSION_KEY);
   try { indexedDB.deleteDatabase('wasl_attachments_v1'); } catch (e) {}
-  try { fetch(API_BASE + '/api/state', { method: 'DELETE' }).catch(() => {}); } catch (e) {}
   setTimeout(() => location.reload(), 400);
 }
 

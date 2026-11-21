@@ -77,10 +77,9 @@ module.exports = async function handler(req, res) {
       return sendJson(req, res, 200, { ok: true, data: result.data, revision: result.revision });
     }
     if (method === 'DELETE') {
-      const { error } = await supabase.from('app_state').delete().eq('id', STATE_ID);
-      if (error) throw error;
-      invalidateStateCache();
-      return sendJson(req, res, 200, { ok: true });
+      // لا نسمح بمسح قاعدة الإنتاج عبر مسار عام أو من متصفح مستخدم.
+      // التصفير المقصود يجب أن ينفذ كإجراء إداري مُراجع خارج هذا endpoint.
+      return sendJson(req, res, 405, { error: 'حذف الحالة معطل للحماية؛ استخدم إجراء تصفير إداري موثق' });
     }
     res.setHeader('Allow', 'GET, PUT, POST, DELETE');
     return sendJson(req, res, 405, { error: 'method not allowed' });
