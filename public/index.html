@@ -293,6 +293,7 @@ input[dir="ltr"],select[dir="ltr"],textarea[dir="ltr"],.ltr{direction:ltr;text-a
 // ═══════════════════════════════════════════════════════════════════
 const STORAGE_KEY = 'wasl_v6';
 const SESSION_KEY = 'wasl_session_v6';
+const PAGE_SESSION_KEY = 'wasl_page_v6';
 const LOGO_STORAGE_KEY = 'wasl_logos_cache_v1';
 // عنوان الخادم الوسيط (Node/Express + Supabase) — يمكن تجاوزه عبر window.WASL_API_BASE
 const API_BASE = (window.WASL_API_BASE || '').replace(/\/$/, '');
@@ -433,7 +434,7 @@ async function preloadLogos(force = false) {
 const CANCEL_REASONS = ['طلب المريض','تحسن حالة المريض','وفاة المريض','نقل لمستشفى آخر','خطأ في التسجيل','أخرى'];
 const REFERRAL_TYPES = ['طارئ', 'تنويم عادي', 'عيادات', 'استشارة طبية'];
 const REFERRAL_TYPE_META = {
-  'طارئ':         { label: 'طارئ',          icon: '🚨', color: '#b91c1c', chip: 't-er', admission: 'قبول طوارئ' },
+  'طارئ':         { label: 'طارئ',          icon: '🚨', color: '#b91c1c', chip: 't-er', admission: 'قبول للتنويم' },
   'تنويم عادي':   { label: 'تنويم عادي',    icon: '🛏',  color: '#1e40af', chip: 't-ip', admission: 'قبول تنويم' },
   'عيادات':       { label: 'عيادات',         icon: '🏥', color: '#166534', chip: 't-cl', admission: 'قبول عيادات' },
   'استشارة طبية': { label: 'استشارة طبية',   icon: '📋', color: '#5A727A', chip: 't-cs', admission: 'استشارة طبية' }
@@ -464,7 +465,7 @@ const fmtDate = iso => iso ? new Date(iso).toLocaleString('ar-SA', { dateStyle: 
 const roleLabel = r => ({ coordinator: 'منسق الإحالات', doctor: 'طبيب', beds: 'إدارة الأسرة', admin: 'مدير النظام', pending: 'بانتظار الموافقة' }[r] || r);
 const fmtSize = b => { if (!b) return '0 B'; if (b > 1048576) return (b/1048576).toFixed(1)+' م.ب'; if (b > 1024) return Math.round(b/1024)+' ك.ب'; return b+' B'; };
 const refNoOf = r => (r.ref_no || r.id || '');
-const isDirectER = r => r && r.admission_type === 'قبول طوارئ' && r.ward_type === 'طوارئ';
+const isDirectER = r => r && r.ward_type === 'طوارئ' && (r.emergency_admission === true || r.admission_type === 'قبول طوارئ');
 const isConsultation = r => r && r.priority === 'استشارة طبية';
 const typeMetaOf = r => REFERRAL_TYPE_META[r.priority] || { label: r.priority || '—', icon: '📄', chip: '', color: '#475569' };
 const typeChip = r => {
@@ -1091,9 +1092,10 @@ function transitionReferral(id, to, payload = {}) {
     r.assigned_doctor_id = r.assigned_doctor_id || CURRENT_USER.id;
     const meta = REFERRAL_TYPE_META[r.priority];
     r.admission_type = meta ? meta.admission : 'قبول تنويم';
-    r.ward_type = (payload.emergency_accept === 'نعم' && r.priority === 'طارئ') ? 'طوارئ' : ((payload.ward_type && payload.ward_type.trim()) || '');
+    r.emergency_admission = r.priority === 'طارئ' && payload.emergency_accept === 'نعم';
+    r.ward_type = r.emergency_admission ? 'طوارئ' : ((payload.ward_type && payload.ward_type.trim()) || '');
     r.doctor_mobile = CURRENT_USER.mobile || DEFAULT_MOBILES[CURRENT_USER.username] || r.doctor_mobile || '';
-    if (r.priority === 'طارئ' && payload.emergency_accept === 'نعم') r.admission_type = 'قبول طوارئ';
+    if (r.emergency_admission) r.admission_type = 'قبول للتنويم';
     notifyRole('coordinator', r.id, 'الطبيب قَبِل الإحالة — بانتظار توجيهك', CURRENT_USER.full_name);
   }
   if (to === 'doctor_rejected') {
@@ -1542,6 +1544,7 @@ function doLogin() {
 function doLogout() {
   if (CURRENT_USER) audit('logout', 'user', CURRENT_USER.id, '');
   localStorage.removeItem(SESSION_KEY);
+  localStorage.removeItem(PAGE_SESSION_KEY);
   sessionStorage.removeItem(SESSION_KEY);
   CURRENT_USER = null; CURRENT_CHAT = null;
   $('app').classList.add('hidden');
@@ -1688,9 +1691,9 @@ function enterApp() {
   $('userAvatar').textContent = CURRENT_USER.full_name[0];
   if (CURRENT_USER.must_change_password) { showChangePassword(true); return; }
   const r = CURRENT_USER.role;
-  if (r === 'doctor') showPage('doctor_inbox');
-  else if (r === 'beds') showPage('bed_requests');
-  else showPage('dashboard');
+  const savedPage = localStorage.getItem(PAGE_SESSION_KEY);
+  const defaultPage = r === 'doctor' ? 'doctor_inbox' : (r === 'beds' ? 'bed_requests' : 'dashboard');
+  showPage(savedPage || defaultPage);
 }
 
 function showChangePassword(force = false) {
@@ -1839,19 +1842,21 @@ function showPage(p) {
   if (p === 'dashboard' && CURRENT_USER.role === 'beds') p = 'bed_requests';
 
   if (p === 'chat') {
-    PAGE = 'chat'; buildNav();
+    PAGE = 'chat'; localStorage.setItem(PAGE_SESSION_KEY, PAGE); buildNav();
     $('main').innerHTML = '';
     try { renderChatPage(); } catch(e) { $('main').innerHTML = `<div class="panel"><div class="notice danger">${esc(e.message)}</div></div>`; }
     return;
   }
   if (p === 'shifts') {
-    PAGE = 'shifts'; buildNav();
+    PAGE = 'shifts'; localStorage.setItem(PAGE_SESSION_KEY, PAGE); buildNav();
     $('main').innerHTML = '';
     try { renderShiftsPage(); } catch(e) { $('main').innerHTML = `<div class="panel"><div class="notice danger">${esc(e.message)}</div></div>`; }
     return;
   }
 
-  PAGE = p; buildNav();
+  PAGE = p;
+  localStorage.setItem(PAGE_SESSION_KEY, PAGE);
+  buildNav();
   const T = {
     dashboard:['لوحة التحكم','نظرة شاملة على جميع الإحالات'],
     create:['إحالة جديدة','تسجيل حالة جديدة'],
@@ -2007,16 +2012,6 @@ function deleteReferral(id) {
   if (!confirm(`حذف الإحالة ${refNoOf(r)} نهائياً من الحالة المشتركة؟`)) return;
   DATA.referrals = DATA.referrals.filter(x => x.id !== id);
   saveData(); audit('referral_deleted', 'referral', id, refNoOf(r)); toast('✓ تم حذف الإحالة', 'ok'); showPage(PAGE);
-}
-
-function pullReferral(id) {
-  if (!['admin', 'coordinator'].includes(CURRENT_USER?.role)) return toast('غير مصرح', 'err');
-  const r = DATA.referrals.find(x => x.id === id); if (!r || STATES[r.status]?.terminal) return toast('لا يمكن سحب هذه الإحالة', 'err');
-  if (!confirm(`سحب الإحالة ${refNoOf(r)} وإغلاقها؟`)) return;
-  const from = r.status; r.status = 'cancelled'; r.cancel_reason = 'سحب الإحالة من قبل المنسق'; r.updated_at = nowIso();
-  if (!Array.isArray(r.timeline)) r.timeline = [];
-  r.timeline.push({ ts: nowIso(), from, to: 'cancelled', user: CURRENT_USER.full_name, role: CURRENT_USER.role, user_id: CURRENT_USER.id, action: 'سحب الإحالة', details: { reason: r.cancel_reason } });
-  saveData(); audit('referral_pulled', 'referral', id, refNoOf(r)); toast('✓ تم سحب الإحالة', 'ok'); showPage(PAGE);
 }
 
 function openTransferReferral(id) {
@@ -2551,7 +2546,6 @@ function renderActionForm(r, action) {
   }
   else if (action.to === 'bed_rejected') fields = `<div class="field full"><label>سبب الرفض *</label><select name="reason" required><option value="">— اختر —</option><option>لا يوجد سرير شاغر</option><option>القسم ممتلئ</option><option>نوع غير متوافق</option><option>يحتاج تقييم</option><option>أخرى</option></select></div>`;
   else if (action.to === 'completed') fields = `<div class="field full"><label>ملاحظات الإغلاق</label><textarea name="notes"></textarea></div>`;
-  else if (action.to === 'cancelled') fields = `<div class="field full"><label>سبب الإلغاء *</label><select name="reason" required><option value="">— اختر —</option>${CANCEL_REASONS.map(o => `<option value="${esc(o)}">${esc(o)}</option>`).join('')}</select></div>`;
   else if (action.to === 'awaiting_bed') fields = `<div class="field full"><div class="notice info">سيُرسل لإدارة الأسرة</div></div>`;
   return `<div class="action-form"><h4>${actionIcon} ${actionLabel}</h4><form onsubmit="executeAction(event,'${r.id}','${action.to}')"><div class="grid2">${fields}</div><div style="margin-top:14px"><button class="${action.btn}" type="submit">تنفيذ</button></div></form></div>`;
 }
@@ -2809,7 +2803,7 @@ async function openPrint(id) {
     consultDate: dateStr(r.consultation_at || r.doctor_responded_at),
     consultDept: r.specialty || '—',
     bedAvail: r.bed_number ? 'متوفر / Available' : 'غير متوفر / N/A',
-    bedEmergency: r.admission_type === 'قبول طوارئ' ? 'نعم / Yes' : 'لا / No',
+    bedEmergency: isDirectER(r) ? 'نعم / Yes' : 'لا / No',
     bedType: r.bed_type || (isDirectER(r) ? 'طوارئ / ER' : '—'),
     bedRoomNo: r.bed_number || '—',
     bedDept: r.bed_ward || (isDirectER(r) ? 'طوارئ / Emergency' : '—'),
@@ -2846,7 +2840,7 @@ function getPrintTitle(tpl) {
   return {
     inpatient:    { ar: 'نموذج قبول وتنويم مريض بالمستشفى', en: 'Inpatient Admission Acceptance Form', badge: 'قبول وتنويم بالمستشفى - Inpatient Admission' },
     clinic:       { ar: 'نموذج قبول وتنسيق موعد بالعيادات الخارجية', en: 'Outpatient Clinic Acceptance & Appointment Form', badge: 'قبول عيادات خارجية - Outpatient Clinic' },
-    emergency:    { ar: 'نموذج قبول طوارئ', en: 'Emergency Admission Acceptance Form', badge: 'قبول طوارئ - Emergency Admission' },
+    emergency:    { ar: 'نموذج قبول للتنويم — طوارئ', en: 'Emergency Admission Acceptance Form', badge: 'قبول للتنويم - Emergency Admission' },
     consultation: { ar: 'نموذج استشارة طبية', en: 'Medical Consultation Report', badge: 'استشارة طبية - Medical Consultation' },
     reject:       { ar: 'إشعار عدم قبول إحالة طبية', en: 'Medical Referral Rejection Notice', badge: 'عدم قبول إحالة - Rejection Notice' },
     missing:      { ar: 'إشعار طلب استكمال نواقص وتقارير طبية', en: 'Medical Deficiencies & Clinical Requirements Request', badge: 'النواقص الطبية - Medical Deficiencies' }
