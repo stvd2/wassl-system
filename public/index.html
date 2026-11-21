@@ -294,6 +294,31 @@ let CURRENT_CHAT = null;
 let CHAT_TAB = 'direct';
 let REALTIME_CHANNEL = null;
 let REALTIME_REFRESH_TIMER = null;
+let REALTIME_REFRESHING = false;
+
+async function refreshFromRealtime() {
+  if (REALTIME_REFRESHING) return;
+  REALTIME_REFRESHING = true;
+  try {
+    const next = await loadData();
+    if (!next) return;
+    DATA = next;
+    if (CURRENT_USER) {
+      const user = DATA.users.find(x => x.id === CURRENT_USER.id);
+      if (user) {
+        CURRENT_USER = user;
+        $('userName').textContent = CURRENT_USER.full_name;
+        $('userRole').textContent = roleLabel(CURRENT_USER.role) + (CURRENT_USER.department ? ' — ' + CURRENT_USER.department : '');
+        $('userAvatar').textContent = CURRENT_USER.full_name[0];
+        renderPage(PAGE);
+      }
+    }
+  } catch (e) {
+    console.warn('[WASL] Realtime refresh failed:', e.message);
+  } finally {
+    REALTIME_REFRESHING = false;
+  }
+}
 
 function setupRealtime() {
   if (REALTIME_CHANNEL || !window.supabase?.createClient) return;
@@ -304,7 +329,7 @@ function setupRealtime() {
     REALTIME_CHANNEL = client.channel('wasl-app-state')
       .on('postgres_changes', { event: '*', schema: 'public', table: 'app_state' }, () => {
         clearTimeout(REALTIME_REFRESH_TIMER);
-        REALTIME_REFRESH_TIMER = setTimeout(() => window.location.reload(), 250);
+        REALTIME_REFRESH_TIMER = setTimeout(refreshFromRealtime, 250);
       })
       .subscribe((status) => {
         if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT') {
