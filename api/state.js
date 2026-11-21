@@ -10,6 +10,7 @@ const STATE_ID = 'main';
 
 module.exports = async function handler(req, res) {
   const { method } = req;
+  res.setHeader('Cache-Control', 'no-store, max-age=0');
   try {
     if (method === 'GET') {
       const { data, error } = await supabase
