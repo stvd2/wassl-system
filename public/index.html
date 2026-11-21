@@ -562,21 +562,39 @@ function openAttsDB() {
 }
 async function attsPut(id, blob) {
   const db = await openAttsDB();
-  return new Promise((res, rej) => {
+  await new Promise((res, rej) => {
     const tx = db.transaction('attachments', 'readwrite');
     tx.objectStore('attachments').put({ id, blob });
     tx.oncomplete = () => res();
     tx.onerror = () => rej(tx.error);
   });
+  const res = await fetch(API_BASE + '/api/attachment?id=' + encodeURIComponent(id), {
+    method: 'PUT',
+    headers: { 'Content-Type': blob.type || 'application/octet-stream' },
+    body: blob,
+    cache: 'no-store'
+  });
+  if (!res.ok) throw new Error(`فشل رفع المرفق (${res.status})`);
 }
 async function attsGet(id) {
   const db = await openAttsDB();
-  return new Promise((res, rej) => {
+  const local = await new Promise((res, rej) => {
     const tx = db.transaction('attachments', 'readonly');
     const req = tx.objectStore('attachments').get(id);
     req.onsuccess = () => res(req.result ? req.result.blob : null);
     req.onerror = () => rej(req.error);
   });
+  if (local) return local;
+  const remote = await fetch(API_BASE + '/api/attachment?id=' + encodeURIComponent(id), { cache: 'no-store' });
+  if (!remote.ok) return null;
+  const blob = await remote.blob();
+  try { await new Promise((res, rej) => {
+    const tx = db.transaction('attachments', 'readwrite');
+    tx.objectStore('attachments').put({ id, blob });
+    tx.oncomplete = () => res();
+    tx.onerror = () => rej(tx.error);
+  }); } catch (e) {}
+  return blob;
 }
 
 // ═══════════════════════════════════════════════════════════════════
@@ -762,38 +780,42 @@ async function loadData() {
     throw new Error('البيانات المشتركة في الخادم غير صالحة أو بإصدار غير مدعوم');
   }
   if (!Number.isInteger(p.meta.sync_revision) || p.meta.sync_revision < 0) p.meta.sync_revision = 0;
+  _syncBlocked = false;
   try { localStorage.setItem(STORAGE_KEY, JSON.stringify(p)); } catch (e) {}
   return p;
 }
 
 let _saveTimer = null;
+let _saveInFlight = Promise.resolve();
+let _syncBlocked = false;
+async function pushStateSnapshot() {
+  if (_syncBlocked || !DATA?.meta) return;
+  if (!Number.isInteger(DATA.meta.sync_revision)) DATA.meta.sync_revision = 0;
+  const snapshot = JSON.parse(JSON.stringify(DATA));
+  const res = await fetch(API_BASE + '/api/state', {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(snapshot),
+    cache: 'no-store'
+  });
+  if (res.status === 409) {
+    _syncBlocked = true;
+    toast('تعارض مزامنة: توجد تعديلات أحدث على جهاز آخر. حدّث الصفحة قبل المتابعة.', 'err');
+    return;
+  }
+  if (!res.ok) throw new Error(`فشل حفظ البيانات (${res.status})`);
+  const result = await res.json();
+  if (result?.data?.meta && DATA.meta.sync_revision === snapshot.meta.sync_revision) {
+    DATA.meta.sync_revision = result.data.meta.sync_revision;
+    try { localStorage.setItem(STORAGE_KEY, JSON.stringify(DATA)); } catch (e) {}
+  }
+}
 function syncToBackend() {
   if (_saveTimer) clearTimeout(_saveTimer);
-  _saveTimer = setTimeout(async () => {
-    try {
-      if (!DATA?.meta) throw new Error('حالة التطبيق غير مهيأة');
-      if (!Number.isInteger(DATA.meta.sync_revision)) DATA.meta.sync_revision = 0;
-      const res = await fetch(API_BASE + '/api/state', {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(DATA),
-        cache: 'no-store',
-        keepalive: true
-      });
-      if (res.status === 409) {
-        toast('تعارض مزامنة: توجد تعديلات أحدث على جهاز آخر. حدّث الصفحة قبل المتابعة.', 'err');
-        return;
-      }
-      if (!res.ok) throw new Error(`فشل حفظ البيانات (${res.status})`);
-      const result = await res.json();
-      if (result?.data?.meta) {
-        DATA.meta.sync_revision = result.data.meta.sync_revision;
-        try { localStorage.setItem(STORAGE_KEY, JSON.stringify(DATA)); } catch (e) {}
-      }
-    } catch (e) {
-      console.error('[WASL] sync:', e);
-      toast('تعذر مزامنة التعديل مع الخادم. أعد المحاولة عند عودة الاتصال.', 'err');
-    }
+  _saveTimer = setTimeout(() => {
+    _saveInFlight = _saveInFlight
+      .then(pushStateSnapshot)
+      .catch(e => { console.error('[WASL] sync:', e); toast('تعذر مزامنة التعديل مع الخادم. أعد المحاولة عند عودة الاتصال.', 'err'); });
   }, 400);
 }
 
