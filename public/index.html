@@ -287,7 +287,6 @@ const API_BASE = (window.WASL_API_BASE || '').replace(/\/$/, '');
 const SUPABASE_PUBLIC_URL = 'https://rtnzxmedlmymtgyzgmhp.supabase.co';
 const SUPABASE_PUBLISHABLE_KEY = 'sb_publishable_mROaMe2BCRBDcwkxExZgRQ_kMTpL2E1';
 let DATA = null;
-let DATA = null;
 let CURRENT_USER = null;
 let PAGE = 'dashboard';
 let CURRENT_CHAT = null;
@@ -745,7 +744,17 @@ async function loadData() {
   // Supabase عبر /api/state هو المصدر الوحيد للحالة المشتركة بين الأجهزة.
   // لا نستخدم localStorage كاحتياطي هنا حتى لا تعيد نسخة قديمة الكتابة فوق
   // بيانات أحدث حفظها جهاز آخر عند حدوث انقطاع شبكي مؤقت.
-  const res = await fetch(API_BASE + '/api/state', { cache: 'no-store' });
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 12000);
+  let res;
+  try {
+    res = await fetch(API_BASE + '/api/state', { cache: 'no-store', signal: controller.signal });
+  } catch (e) {
+    if (e?.name === 'AbortError') throw new Error('انتهت مهلة الاتصال بالخادم (12 ثانية)');
+    throw new Error('تعذر الاتصال بالخادم');
+  } finally {
+    clearTimeout(timeout);
+  }
   if (!res.ok) throw new Error(`فشل تحميل البيانات من الخادم (${res.status})`);
   const p = await res.json();
   if (p === null) return null;
@@ -1335,11 +1344,14 @@ function doLogin() {
   const errEl = $('loginErr');
   errEl.classList.add('hidden');
   if (!u || !p) { errEl.textContent = 'أكمل البيانات'; errEl.classList.remove('hidden'); return; }
+  if (!DATA || !Array.isArray(DATA.users)) {
+    errEl.textContent = '❌ لم تكتمل تهيئة النظام، أعد تحميل الصفحة';
+    errEl.classList.remove('hidden');
+    return;
+  }
   $('loginBtn').disabled = true; $('loginBtnText').textContent = 'جاري التحقق...';
   try {
-    if (!DATA.users.length) seedIfNeeded(true);
     let user = DATA.users.find(x => x.username === u);
-    if (!user) { seedIfNeeded(true); user = DATA.users.find(x => x.username === u); }
     if (!user) throw new Error(`الحساب "${u}" غير موجود`);
     if (user.rejected) throw new Error('تم رفض التسجيل');
     if (user.pending_approval) throw new Error('بانتظار موافقة المدير');
