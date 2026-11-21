@@ -230,8 +230,8 @@ table.t tr:hover td{background:#fafcfc}
 <div id="loginScreen" class="lw">
   <div class="login">
     <div class="login-logos">
-      <img src="https://res.cloudinary.com/dbahe7lxz/image/upload/v1794522494/idraaak/u3tjmxuydmvrupvn2ehw.png" alt="رؤية 2030" onerror="this.style.display='none'">
-      <img src="https://res.cloudinary.com/dbahe7lxz/image/upload/v1794522340/idraaak/dg14owr5kmstc6s4fzsl.jpg" alt="مستشفى الملك فيصل" onerror="this.style.display='none'">
+      <img src="assets/logos/vision.svg" alt="رؤية 2030" onerror="this.onerror=null;this.style.display='none'">
+      <img src="assets/logos/hospital.svg" alt="مستشفى الملك فيصل" onerror="this.onerror=null;this.style.display='none'">
     </div>
     <div class="brand"><div class="logo">و</div><div><h1>وَصْل</h1><p>نظام إدارة الإحالات الطبية v9.0</p></div></div>
     <h3 style="margin:0 0 4px;color:#17394b;font-size:18px">تسجيل الدخول</h3>
@@ -342,9 +342,9 @@ function setupRealtime() {
 }
 
 const PRINT_LOGOS = {
-  hospital: 'https://res.cloudinary.com/dbahe7lxz/image/upload/v1794522340/idraaak/dg14owr5kmstc6s4fzsl.jpg',
-  makkah:   'https://res.cloudinary.com/dbahe7lxz/image/upload/v1794522445/idraaak/jbsom1jsvtdwffg0psvb.jpg',
-  vision:   'https://res.cloudinary.com/dbahe7lxz/image/upload/v1794522494/idraaak/u3tjmxuydmvrupvn2ehw.png'
+  hospital: 'assets/logos/hospital.svg',
+  makkah:   'assets/logos/makkah.svg',
+  vision:   'assets/logos/vision.svg'
 };
 
 let LOGO_CACHE = {};
@@ -2518,9 +2518,9 @@ function buildPrintDocument(tpl, d) {
   const T = getPrintTitle(tpl);
 
   const header = `<header class="print-header">
-    <div class="header-col-right"><img src="${logoSrc('hospital')}" class="img-hosp" alt="مستشفى الملك فيصل" onerror="this.style.display='none'"></div>
-    <div class="header-col-center"><img src="${logoSrc('makkah')}" class="img-ehalati" alt="تجمع مكة الصحي" onerror="this.style.display='none'"></div>
-    <div class="header-col-left"><img src="${logoSrc('vision')}" class="img-vision" alt="رؤية 2030" onerror="this.style.display='none'"></div>
+    <div class="header-col-right"><img src="${logoSrc('hospital')}" class="img-hosp" alt="مستشفى الملك فيصل" onerror="this.onerror=null;this.style.display='none'"></div>
+    <div class="header-col-center"><img src="${logoSrc('makkah')}" class="img-ehalati" alt="تجمع مكة الصحي" onerror="this.onerror=null;this.style.display='none'"></div>
+    <div class="header-col-left"><img src="${logoSrc('vision')}" class="img-vision" alt="رؤية 2030" onerror="this.onerror=null;this.style.display='none'"></div>
   </header>`;
 
   const topBar = `<div class="doc-title-main">${escH(T.ar)}</div>
