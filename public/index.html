@@ -95,6 +95,7 @@ table.t tr:hover td{background:#fafcfc}
 .empty-icon{font-size:48px;margin-bottom:14px;opacity:.5}
 .storage-info{background:#f0f6ff;border:1px solid #d0e0f0;border-radius:8px;padding:10px 14px;font-size:12px;color:#1a4a7a;margin-top:8px;line-height:1.6}
 .storage-info b{color:var(--navy)}
+.quota-meter{height:12px;background:#edf2f4;border-radius:999px;overflow:hidden;margin:10px 0 8px;border:1px solid #dce5e8}.quota-fill{height:100%;min-width:2px;background:var(--green);transition:width .2s}.quota-fill.warn{background:var(--amber)}.quota-fill.crit{background:var(--red)}
 .timeline{position:relative;padding-right:32px;margin:16px 0}
 .timeline::before{content:'';position:absolute;right:10px;top:8px;bottom:8px;width:2px;background:var(--line)}
 .tl-item{position:relative;padding:12px 0 16px 0;border-bottom:1px dashed var(--line)}
@@ -297,6 +298,7 @@ const LOGO_STORAGE_KEY = 'wasl_logos_cache_v1';
 const API_BASE = (window.WASL_API_BASE || '').replace(/\/$/, '');
 const API_STATE = API_BASE + '/api/state';
 const API_IMPORT = API_BASE + '/api/import';
+const FREE_QUOTA_KB = 512000;
 const SUPABASE_PUBLIC_URL = 'https://rtnzxmedlmymtgyzgmhp.supabase.co';
 const SUPABASE_PUBLISHABLE_KEY = 'sb_publishable_mROaMe2BCRBDcwkxExZgRQ_kMTpL2E1';
 let DATA = null;
@@ -313,9 +315,12 @@ let LAST_REMOTE_REVISION = 0;
 let LIST_PAGE = 1;
 const LIST_PAGE_SIZE = 10;
 let LIST_QUERY = '';
+let LIST_STATUS = '';
+let LIST_TYPE = '';
+let LIST_DEPT = '';
 
 function canPrint() {
-  return ['coordinator', 'admin', 'system'].includes(CURRENT_USER?.role);
+  return CURRENT_USER?.role === 'coordinator';
 }
 
 async function refreshFromRealtime() {
@@ -1930,13 +1935,16 @@ function renderList(p) {
 
   const query = LIST_QUERY.trim().toLowerCase();
   if (query) list = list.filter(r => [refNoOf(r), r.patient_name, r.mrn, r.priority, r.specialty, r.target_specialty, r.status].filter(Boolean).join(' ').toLowerCase().includes(query));
+  if (LIST_STATUS) list = list.filter(r => r.status === LIST_STATUS);
+  if (LIST_TYPE) list = list.filter(r => r.priority === LIST_TYPE);
+  if (LIST_DEPT) list = list.filter(r => (r.target_specialty || r.specialty) === LIST_DEPT);
   const totalPages = Math.max(1, Math.ceil(list.length / LIST_PAGE_SIZE));
   LIST_PAGE = Math.min(Math.max(1, LIST_PAGE), totalPages);
   const visible = list.slice((LIST_PAGE - 1) * LIST_PAGE_SIZE, LIST_PAGE * LIST_PAGE_SIZE);
   const pageButtons = Array.from({length: Math.min(totalPages, 4)}, (_, i) => i + 1).map(n => `<button class=\"ghost sm\" onclick=\"setListPage(${n})\">${n}</button>`).join('');
   $('content').innerHTML = `<div class="panel">
     <h3>القائمة (${list.length})</h3>
-    <div style="margin-bottom:14px"><input class="searchbox" value="${esc(LIST_QUERY)}" placeholder="بحث..." oninput="setListQuery(this.value, '${p}')"></div>
+    <div class="grid2" style="margin-bottom:14px"><input class="searchbox" value="${esc(LIST_QUERY)}" placeholder="بحث..." oninput="setListQuery(this.value, '${p}')"><select onchange="setListFilter('status',this.value,'${p}')"><option value="">كل الحالات</option>${Object.entries(STATES).map(([key,val]) => `<option value="${esc(key)}" ${LIST_STATUS === key ? 'selected' : ''}>${esc(val.label)}</option>`).join('')}</select><select onchange="setListFilter('type',this.value,'${p}')"><option value="">كل الأنواع</option>${REFERRAL_TYPES.map(type => `<option value="${esc(type)}" ${LIST_TYPE === type ? 'selected' : ''}>${esc(type)}</option>`).join('')}</select><select onchange="setListFilter('dept',this.value,'${p}')"><option value="">كل التخصصات</option>${DEPARTMENTS.map(dept => `<option value="${esc(dept)}" ${LIST_DEPT === dept ? 'selected' : ''}>${esc(dept)}</option>`).join('')}</select></div>
     <div id="listWrap">${tableHTML(visible)}</div>
     ${totalPages > 1 ? `<div style="display:flex;gap:6px;align-items:center;justify-content:center;margin-top:16px;flex-wrap:wrap">${pageButtons}${totalPages > 4 ? '<span>…</span>' : ''}<button class="secondary sm" onclick="setListPage(${Math.min(totalPages, LIST_PAGE + 1)})" ${LIST_PAGE >= totalPages ? 'disabled' : ''}>التالي</button><span style="font-size:12px;color:var(--muted)">صفحة ${LIST_PAGE} من ${totalPages}</span></div>` : ''}
   </div>`;
@@ -1944,10 +1952,70 @@ function renderList(p) {
 
 function setListPage(page) { LIST_PAGE = Math.max(1, Number(page) || 1); renderList(PAGE); }
 function setListQuery(value, page) { LIST_QUERY = String(value || ''); LIST_PAGE = 1; renderList(page || PAGE); }
+function setListFilter(kind, value, page) { if (kind === 'status') LIST_STATUS = value; if (kind === 'type') LIST_TYPE = value; if (kind === 'dept') LIST_DEPT = value; LIST_PAGE = 1; renderList(page || PAGE); }
 
 function filterTable(q) {
   const s = q.toLowerCase();
   document.querySelectorAll('#listWrap tbody tr').forEach(tr => { tr.style.display = tr.textContent.toLowerCase().includes(s) ? '' : 'none'; });
+}
+
+function referralActionButtons(r) {
+  if (!['admin', 'coordinator'].includes(CURRENT_USER?.role)) return '';
+  const terminal = !!STATES[r.status]?.terminal;
+  return `<div style="display:flex;gap:4px;flex-wrap:wrap;justify-content:flex-start"><button class="ghost xs" onclick="openEditReferral('${esc(r.id)}')">✏ تعديل</button>${!terminal ? `<button class="secondary xs" onclick="openTransferReferral('${esc(r.id)}')">↔ تحويل</button><button class="warn xs" onclick="pullReferral('${esc(r.id)}')">↩ سحب</button>` : ''}${CURRENT_USER.role === 'admin' ? `<button class="danger xs" onclick="deleteReferral('${esc(r.id)}')">🗑 حذف</button>` : ''}</div>`;
+}
+
+function openEditReferral(id) {
+  if (!['admin', 'coordinator'].includes(CURRENT_USER?.role)) return toast('غير مصرح', 'err');
+  const r = DATA.referrals.find(x => x.id === id); if (!r) return toast('الإحالة غير موجودة', 'err');
+  $('modalRoot').innerHTML = `<div class="modal-back" onclick="if(event.target===this)closeModal()"><div class="modal" style="max-width:680px"><div class="mh"><h3>✏ تعديل الإحالة ${esc(refNoOf(r))}</h3><button class="ghost sm" onclick="closeModal()">✕</button></div><form class="grid2" onsubmit="saveReferralEdit(event,'${esc(id)}')"><div class="field"><label>اسم المريض *</label><input name="patient_name" value="${esc(r.patient_name)}" required></div><div class="field"><label>رقم الملف *</label><input name="mrn" value="${esc(r.mrn)}" required dir="ltr"></div><div class="field"><label>القسم النهائي *</label><select name="target_specialty" required>${DEPARTMENTS.map(d => `<option value="${esc(d)}" ${targetSpecialtyOf(r) === d ? 'selected' : ''}>${esc(d)}</option>`).join('')}</select></div><div class="field"><label>نوع الإحالة *</label><select name="priority" required>${REFERRAL_TYPES.map(d => `<option value="${esc(d)}" ${r.priority === d ? 'selected' : ''}>${esc(d)}</option>`).join('')}</select></div><div class="field full"><label>التشخيص *</label><textarea name="diagnosis" required>${esc(r.diagnosis)}</textarea></div><div class="field full"><label>ملاحظات</label><textarea name="notes">${esc(r.notes || '')}</textarea></div><div class="full"><button class="primary" type="submit" style="width:100%">حفظ التعديل</button></div></form></div></div>`;
+}
+
+function saveReferralEdit(event, id) {
+  event.preventDefault();
+  if (!['admin', 'coordinator'].includes(CURRENT_USER?.role)) return toast('غير مصرح', 'err');
+  const r = DATA.referrals.find(x => x.id === id); if (!r) return toast('الإحالة غير موجودة', 'err');
+  const d = Object.fromEntries(new FormData(event.target));
+  Object.assign(r, { patient_name: d.patient_name.trim(), mrn: d.mrn.trim(), target_specialty: d.target_specialty, specialty: d.target_specialty, priority: d.priority, diagnosis: d.diagnosis.trim(), notes: d.notes.trim(), updated_at: nowIso() });
+  if (!Array.isArray(r.timeline)) r.timeline = [];
+  r.timeline.push({ ts: nowIso(), from: r.status, to: r.status, user: CURRENT_USER.full_name, role: CURRENT_USER.role, user_id: CURRENT_USER.id, action: 'تعديل بيانات الإحالة', details: {} });
+  saveData(); audit('referral_edited', 'referral', id, refNoOf(r)); closeModal(); toast('✓ تم تعديل الإحالة', 'ok'); showPage(PAGE);
+}
+
+function deleteReferral(id) {
+  if (CURRENT_USER?.role !== 'admin') return toast('حذف الإحالة متاح لمدير النظام فقط', 'err');
+  const r = DATA.referrals.find(x => x.id === id); if (!r) return;
+  if (!confirm(`حذف الإحالة ${refNoOf(r)} نهائياً من الحالة المشتركة؟`)) return;
+  DATA.referrals = DATA.referrals.filter(x => x.id !== id);
+  saveData(); audit('referral_deleted', 'referral', id, refNoOf(r)); toast('✓ تم حذف الإحالة', 'ok'); showPage(PAGE);
+}
+
+function pullReferral(id) {
+  if (!['admin', 'coordinator'].includes(CURRENT_USER?.role)) return toast('غير مصرح', 'err');
+  const r = DATA.referrals.find(x => x.id === id); if (!r || STATES[r.status]?.terminal) return toast('لا يمكن سحب هذه الإحالة', 'err');
+  if (!confirm(`سحب الإحالة ${refNoOf(r)} وإغلاقها؟`)) return;
+  const from = r.status; r.status = 'cancelled'; r.cancel_reason = 'سحب الإحالة من قبل المنسق'; r.updated_at = nowIso();
+  if (!Array.isArray(r.timeline)) r.timeline = [];
+  r.timeline.push({ ts: nowIso(), from, to: 'cancelled', user: CURRENT_USER.full_name, role: CURRENT_USER.role, user_id: CURRENT_USER.id, action: 'سحب الإحالة', details: { reason: r.cancel_reason } });
+  saveData(); audit('referral_pulled', 'referral', id, refNoOf(r)); toast('✓ تم سحب الإحالة', 'ok'); showPage(PAGE);
+}
+
+function openTransferReferral(id) {
+  if (!['admin', 'coordinator'].includes(CURRENT_USER?.role)) return toast('غير مصرح', 'err');
+  const r = DATA.referrals.find(x => x.id === id); if (!r || STATES[r.status]?.terminal) return toast('لا يمكن تحويل هذه الإحالة', 'err');
+  $('modalRoot').innerHTML = `<div class="modal-back" onclick="if(event.target===this)closeModal()"><div class="modal" style="max-width:500px"><div class="mh"><h3>↔ تحويل الإحالة ${esc(refNoOf(r))}</h3><button class="ghost sm" onclick="closeModal()">✕</button></div><form onsubmit="transferReferral(event,'${esc(id)}')"><div class="field"><label>القسم المستلم *</label><select name="target_specialty" required>${DEPARTMENTS.map(d => `<option value="${esc(d)}" ${targetSpecialtyOf(r) === d ? 'selected' : ''}>${esc(d)}</option>`).join('')}</select></div><div class="field"><label>سبب التحويل</label><textarea name="reason"></textarea></div><button class="primary" type="submit" style="width:100%">تأكيد التحويل</button></form></div></div>`;
+}
+
+function transferReferral(event, id) {
+  event.preventDefault();
+  if (!['admin', 'coordinator'].includes(CURRENT_USER?.role)) return toast('غير مصرح', 'err');
+  const r = DATA.referrals.find(x => x.id === id); if (!r) return;
+  const d = Object.fromEntries(new FormData(event.target)); const from = r.status;
+  r.target_specialty = d.target_specialty; r.specialty = d.target_specialty; r.assigned_doctor_id = null; r.doctor_viewed_at = null; r.status = 'awaiting_doctor'; r.updated_at = nowIso();
+  if (!Array.isArray(r.timeline)) r.timeline = [];
+  r.timeline.push({ ts: nowIso(), from, to: 'awaiting_doctor', user: CURRENT_USER.full_name, role: CURRENT_USER.role, user_id: CURRENT_USER.id, action: 'تحويل الإحالة', details: { department: d.target_specialty, reason: d.reason || '' } });
+  DATA.users.filter(u => u.role === 'doctor' && u.active && u.department === d.target_specialty).forEach(u => notifyUser(u.id, r.id, '🩺 إحالة محولة إلى قسمك'));
+  saveData(); audit('referral_transferred', 'referral', id, d.target_specialty); closeModal(); toast('✓ تم تحويل الإحالة', 'ok'); showPage(PAGE);
 }
 
 function tableHTML(list) {
@@ -1964,7 +2032,7 @@ function tableHTML(list) {
       <td><span class="pill ${st.cls}">${st.label}</span>${actor}</td>
       <td>${r.bed_number ? `<b>${esc(r.bed_number)}</b>` : '—'}</td>
       <td style="font-size:11px;color:var(--muted);white-space:nowrap">${fmtDate(r.updated_at || r.created_at)}</td>
-      <td><button class="secondary sm" onclick="openDetail('${esc(r.id)}')">👁 عرض</button></td>
+      <td><button class="secondary sm" onclick="openDetail('${esc(r.id)}')">👁 عرض</button>${referralActionButtons(r)}</td>
     </tr>`;
   }).join('');
   return `<div class="twrap"><table class="t"><thead><tr>
@@ -2567,19 +2635,54 @@ async function importStateJson(file) {
   } catch (e) { toast('تعذر الاستيراد: ' + e.message, 'err'); }
 }
 
+function resetOperationalDataSafe() {
+  if (CURRENT_USER?.role !== 'admin') return toast('التصفير متاح لمدير النظام فقط', 'err');
+  if (prompt('للتأكيد اكتب: تصفير البيانات') !== 'تصفير البيانات') return toast('تم إلغاء التصفير', 'warn');
+  if (!confirm('سيتم مسح الإحالات والإشعارات ورسائل الدردشة وسجل التدقيق وتحرير الأسرة، مع الإبقاء على المستخدمين وكلمات المرور والمرفقات وإعدادات المزامنة. هل تريد المتابعة؟')) return;
+  DATA.referrals = [];
+  DATA.notifications = [];
+  DATA.audit = [];
+  DATA.shifts = [];
+  (DATA.chats || []).forEach(chat => { chat.messages = []; chat.reads = {}; });
+  (DATA.beds || []).forEach(bed => { bed.available = true; bed.current_patient = null; bed.current_referral = null; bed.updated_at = nowIso(); });
+  DATA.meta.seq = 0; DATA.meta.auditSeq = 0; DATA.meta.notifSeq = 0;
+  addAudit('operational_reset', 'system', 'all', 'تم مسح البيانات التشغيلية مع الحفاظ على الحسابات والمرفقات');
+  toast('✓ تم مسح البيانات التشغيلية وتصفير العدادات', 'ok');
+  showPage('db_monitor');
+}
+
+function freshResetSystemSafe() {
+  if (CURRENT_USER?.role !== 'admin') return toast('إعادة الضبط متاحة لمدير النظام فقط', 'err');
+  if (prompt('للتأكيد اكتب: إعادة ضبط النظام') !== 'إعادة ضبط النظام') return toast('تم إلغاء إعادة الضبط', 'warn');
+  if (!confirm('إعادة الضبط ستعيد الحالة التشغيلية للبداية، لكنها لن تحذف الحسابات أو كلمات المرور أو المرفقات من التخزين. هل تريد المتابعة؟')) return;
+  DATA.referrals = [];
+  DATA.notifications = [];
+  DATA.audit = [];
+  DATA.shifts = [];
+  (DATA.chats || []).forEach(chat => { chat.messages = []; chat.reads = {}; });
+  (DATA.beds || []).forEach(bed => { bed.available = true; bed.current_patient = null; bed.current_referral = null; bed.updated_at = nowIso(); });
+  DATA.meta.seq = 0; DATA.meta.auditSeq = 0; DATA.meta.notifSeq = 0; DATA.meta.seed_done = true;
+  addAudit('fresh_operational_reset', 'system', 'all', 'إعادة الحالة التشغيلية للبداية مع الحفاظ على الحسابات والمرفقات');
+  toast('✓ تمت إعادة الحالة التشغيلية للبداية بأمان', 'ok');
+  showPage('db_monitor');
+}
+
 function renderDbMonitor() {
   if (CURRENT_USER?.role !== 'admin') return showPage('dashboard');
-  const sizeKb = (new Blob([JSON.stringify(DATA || {})]).size / 1024).toFixed(1);
+  const sizeKb = new Blob([JSON.stringify(DATA || {})]).size / 1024;
+  const quotaPct = Math.min(100, Number(((sizeKb / FREE_QUOTA_KB) * 100).toFixed(2)));
+  const quotaClass = quotaPct >= 90 ? 'crit' : (quotaPct >= 70 ? 'warn' : '');
   const rows = [['الإحالات', DATA.referrals.length],['المستخدمون', DATA.users.length],['الأسرة', DATA.beds.length],['المحادثات', DATA.chats.length],['المناوبات', DATA.shifts.length],['بيانات المرفقات', Object.keys(DATA.attachments || {}).length],['سجل التدقيق', DATA.audit.length],['الإشعارات', DATA.notifications.length]];
-  $('content').innerHTML = `<div class="stats"><div class="stat"><label>إصدار الخادم</label><strong>${Number(DATA.meta?.sync_revision || 0)}</strong></div><div class="stat"><label>حجم JSON المحلي</label><strong>${sizeKb} KB</strong></div><div class="stat"><label>حالة المزامنة</label><strong>${_syncBlocked ? 'متعارضة' : 'Supabase'}</strong></div><div class="stat"><label>آخر تعديل محلي</label><strong style="font-size:12px;direction:ltr">${esc(DATA.meta?.local_updated_at || '—')}</strong></div></div>
-    <div class="panel"><h3>📡 مراقبة القاعدة والمزامنة</h3><div class="notice info">المصدر المشترك هو Supabase عبر <b>/api/state</b>. تتم مزامنة التبويبات عبر BroadcastChannel وlocalStorage. لا يتم حذف أو تصفير قاعدة الإنتاج من هذه الشاشة.</div><div style="display:flex;gap:8px;flex-wrap:wrap"><button class="primary" onclick="syncNow()">🔄 مزامنة الآن</button><button class="secondary" onclick="exportStateJson()">⬇ تصدير JSON</button><button class="warn" onclick="chooseStateImport()">⬆ استيراد JSON إلى الخادم</button></div><div class="twrap" style="margin-top:16px"><table class="t" style="min-width:520px"><thead><tr><th>المخزن</th><th>العدد</th></tr></thead><tbody>${rows.map(([k,v]) => `<tr><td><b>${esc(k)}</b></td><td dir="ltr">${Number(v).toLocaleString('en-US')}</td></tr>`).join('')}</tbody></table></div></div>`;
+  $('content').innerHTML = `<div class="stats"><div class="stat"><label>إصدار الخادم</label><strong>${Number(DATA.meta?.sync_revision || 0)}</strong></div><div class="stat"><label>حجم الحالة التقريبي</label><strong>${sizeKb.toFixed(1)} KB</strong></div><div class="stat"><label>حالة المزامنة</label><strong>${_syncBlocked ? 'متعارضة' : 'Supabase'}</strong></div><div class="stat"><label>آخر تعديل محلي</label><strong style="font-size:12px;direction:ltr">${esc(DATA.meta?.local_updated_at || '—')}</strong></div></div>
+    <div class="panel"><h3>📡 مراقبة القاعدة والسعة والمزامنة</h3><div class="notice info">المؤشر التالي تقديري لحجم حالة JSON مقارنة بحد إرشادي قدره ${FREE_QUOTA_KB.toLocaleString('en-US')} KB. لا يمثل قياس Supabase الكامل، ولا يتم حذف أو تصفير قاعدة الإنتاج تلقائياً.</div><div style="display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap"><b>${sizeKb.toFixed(1)} KB / ${FREE_QUOTA_KB.toLocaleString('en-US')} KB</b><span>${quotaPct}%</span></div><div class="quota-meter" aria-label="مؤشر سعة الحالة"><div class="quota-fill ${quotaClass}" style="width:${Math.max(2, quotaPct)}%"></div></div>${quotaPct >= 70 ? `<div class="notice ${quotaPct >= 90 ? 'danger' : 'warn'}">⚠️ اقترب حجم الحالة من الحد الإرشادي. صدّر نسخة JSON قبل أي عملية تنظيف.</div>` : ''}<div style="display:flex;gap:8px;flex-wrap:wrap"><button class="primary" onclick="syncNow()">🔄 مزامنة الآن</button><button class="secondary" onclick="exportStateJson()">⬇ تصدير JSON</button><button class="warn" onclick="chooseStateImport()">⬆ استيراد JSON إلى الخادم</button></div><div class="twrap" style="margin-top:16px"><table class="t" style="min-width:520px"><thead><tr><th>المخزن</th><th>العدد</th></tr></thead><tbody>${rows.map(([k,v]) => `<tr><td><b>${esc(k)}</b></td><td dir="ltr">${Number(v).toLocaleString('en-US')}</td></tr>`).join('')}</tbody></table></div></div>
+    <div class="panel"><h3 style="color:var(--red)">🧹 تنظيف الحالة التشغيلية</h3><div class="notice danger">هذه العمليات تكتب حالة جديدة إلى Supabase بعد تأكيدين صريحين. الحسابات وكلمات المرور والمرفقات لا تُحذف تلقائياً، ولا يتم استدعاء DELETE.</div><div style="display:flex;gap:8px;flex-wrap:wrap"><button class="warn" onclick="resetOperationalDataSafe()">مسح البيانات التشغيلية وتصفير العدادات</button><button class="danger" onclick="freshResetSystemSafe()">إعادة الحالة التشغيلية للبداية</button></div></div>`;
 }
 
 // ═══════════════════════════════════════════════════════════════════
 // الطباعة
 // ═══════════════════════════════════════════════════════════════════
 async function openPrint(id) {
-  if (!canPrint()) return toast('الطباعة متاحة للمنسق ومدير النظام فقط', 'err');
+  if (!canPrint()) return toast('الطباعة متاحة للمنسق فقط', 'err');
   const r = DATA.referrals.find(x => x.id === id);
   if (!r) return toast('غير موجود', 'err');
   const w = window.open('', '_blank');
