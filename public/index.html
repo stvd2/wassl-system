@@ -689,22 +689,18 @@ function loadDataSync() {
 }
 
 async function loadData() {
-  // 1) المصدر الأساسي: الخادم → Supabase
-  try {
-    const res = await fetch(API_BASE + '/api/state', { cache: 'no-store' });
-    if (res.ok) {
-      const p = await res.json();
-      if (p && p.meta && p.meta.version === 'v6') {
-        try { localStorage.setItem(STORAGE_KEY, JSON.stringify(p)); } catch (e) {}
-        return p;
-      }
-    }
-  } catch (e) { /* الخادم غير متاح — نكمل على النسخة المحلية */ }
-
-  // 2) الاحتياطي المحلي (ونرفعه للخادم لاحقاً عند أول حفظ)
-  const local = loadDataSync();
-  if (local) syncToBackend();
-  return local;
+  // Supabase عبر /api/state هو المصدر الوحيد للحالة المشتركة بين الأجهزة.
+  // لا نستخدم localStorage كاحتياطي هنا حتى لا تعيد نسخة قديمة الكتابة فوق
+  // بيانات أحدث حفظها جهاز آخر عند حدوث انقطاع شبكي مؤقت.
+  const res = await fetch(API_BASE + '/api/state', { cache: 'no-store' });
+  if (!res.ok) throw new Error(`فشل تحميل البيانات من الخادم (${res.status})`);
+  const p = await res.json();
+  if (p === null) return null;
+  if (!p || !p.meta || p.meta.version !== 'v6') {
+    throw new Error('البيانات المشتركة في الخادم غير صالحة أو بإصدار غير مدعوم');
+  }
+  try { localStorage.setItem(STORAGE_KEY, JSON.stringify(p)); } catch (e) {}
+  return p;
 }
 
 let _saveTimer = null;
@@ -712,12 +708,18 @@ function syncToBackend() {
   if (_saveTimer) clearTimeout(_saveTimer);
   _saveTimer = setTimeout(async () => {
     try {
-      await fetch(API_BASE + '/api/state', {
+      const res = await fetch(API_BASE + '/api/state', {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(DATA)
+        body: JSON.stringify(DATA),
+        cache: 'no-store',
+        keepalive: true
       });
-    } catch (e) { /* تجاهل — تبقى النسخة المحلية صالحة */ }
+      if (!res.ok) throw new Error(`فشل حفظ البيانات (${res.status})`);
+    } catch (e) {
+      console.error('[WASL] sync:', e);
+      toast('تعذر مزامنة التعديل مع الخادم. أعد المحاولة عند عودة الاتصال.', 'err');
+    }
   }, 400);
 }
 
