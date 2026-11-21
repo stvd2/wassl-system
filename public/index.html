@@ -287,7 +287,6 @@ const API_BASE = (window.WASL_API_BASE || '').replace(/\/$/, '');
 const SUPABASE_PUBLIC_URL = 'https://rtnzxmedlmymtgyzgmhp.supabase.co';
 const SUPABASE_PUBLISHABLE_KEY = 'sb_publishable_mROaMe2BCRBDcwkxExZgRQ_kMTpL2E1';
 let DATA = null;
-let DATA = null;
 let CURRENT_USER = null;
 let PAGE = 'dashboard';
 let CURRENT_CHAT = null;
@@ -745,13 +744,24 @@ async function loadData() {
   // Supabase عبر /api/state هو المصدر الوحيد للحالة المشتركة بين الأجهزة.
   // لا نستخدم localStorage كاحتياطي هنا حتى لا تعيد نسخة قديمة الكتابة فوق
   // بيانات أحدث حفظها جهاز آخر عند حدوث انقطاع شبكي مؤقت.
-  const res = await fetch(API_BASE + '/api/state', { cache: 'no-store' });
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 12000);
+  let res;
+  try {
+    res = await fetch(API_BASE + '/api/state', { cache: 'no-store', signal: controller.signal });
+  } catch (e) {
+    if (e?.name === 'AbortError') throw new Error('انتهت مهلة الاتصال بالخادم (12 ثانية)');
+    throw new Error('تعذر الاتصال بالخادم');
+  } finally {
+    clearTimeout(timeout);
+  }
   if (!res.ok) throw new Error(`فشل تحميل البيانات من الخادم (${res.status})`);
   const p = await res.json();
   if (p === null) return null;
   if (!p || !p.meta || p.meta.version !== 'v6') {
     throw new Error('البيانات المشتركة في الخادم غير صالحة أو بإصدار غير مدعوم');
   }
+  if (!Number.isInteger(p.meta.sync_revision) || p.meta.sync_revision < 0) p.meta.sync_revision = 0;
   try { localStorage.setItem(STORAGE_KEY, JSON.stringify(p)); } catch (e) {}
   return p;
 }
@@ -761,6 +771,8 @@ function syncToBackend() {
   if (_saveTimer) clearTimeout(_saveTimer);
   _saveTimer = setTimeout(async () => {
     try {
+      if (!DATA?.meta) throw new Error('حالة التطبيق غير مهيأة');
+      if (!Number.isInteger(DATA.meta.sync_revision)) DATA.meta.sync_revision = 0;
       const res = await fetch(API_BASE + '/api/state', {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
@@ -768,7 +780,16 @@ function syncToBackend() {
         cache: 'no-store',
         keepalive: true
       });
+      if (res.status === 409) {
+        toast('تعارض مزامنة: توجد تعديلات أحدث على جهاز آخر. حدّث الصفحة قبل المتابعة.', 'err');
+        return;
+      }
       if (!res.ok) throw new Error(`فشل حفظ البيانات (${res.status})`);
+      const result = await res.json();
+      if (result?.data?.meta) {
+        DATA.meta.sync_revision = result.data.meta.sync_revision;
+        try { localStorage.setItem(STORAGE_KEY, JSON.stringify(DATA)); } catch (e) {}
+      }
     } catch (e) {
       console.error('[WASL] sync:', e);
       toast('تعذر مزامنة التعديل مع الخادم. أعد المحاولة عند عودة الاتصال.', 'err');
@@ -782,7 +803,7 @@ function saveData() {
 }
 function initData() {
   return {
-    meta: { version: 'v6', created_at: nowIso(), seed_done: false, seq: 0, auditSeq: 0, notifSeq: 0 },
+    meta: { version: 'v6', sync_revision: 0, created_at: nowIso(), seed_done: false, seq: 0, auditSeq: 0, notifSeq: 0 },
     users: [], referrals: [], beds: [], audit: [], attachments: {}, notifications: [], chats: [], shifts: []
   };
 }
@@ -1335,11 +1356,14 @@ function doLogin() {
   const errEl = $('loginErr');
   errEl.classList.add('hidden');
   if (!u || !p) { errEl.textContent = 'أكمل البيانات'; errEl.classList.remove('hidden'); return; }
+  if (!DATA || !Array.isArray(DATA.users)) {
+    errEl.textContent = '❌ لم تكتمل تهيئة النظام، أعد تحميل الصفحة';
+    errEl.classList.remove('hidden');
+    return;
+  }
   $('loginBtn').disabled = true; $('loginBtnText').textContent = 'جاري التحقق...';
   try {
-    if (!DATA.users.length) seedIfNeeded(true);
     let user = DATA.users.find(x => x.username === u);
-    if (!user) { seedIfNeeded(true); user = DATA.users.find(x => x.username === u); }
     if (!user) throw new Error(`الحساب "${u}" غير موجود`);
     if (user.rejected) throw new Error('تم رفض التسجيل');
     if (user.pending_approval) throw new Error('بانتظار موافقة المدير');
