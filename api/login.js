@@ -2,9 +2,10 @@
 const { createClient } = require('@supabase/supabase-js');
 const { admin, cookies, setCookie, clearCookie } = require('./_auth');
 
-const client = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_CLIENT_KEY || process.env.SUPABASE_SERVICE_ROLE_KEY, {
+const clientKey = process.env.SUPABASE_CLIENT_KEY || '';
+const client = clientKey ? createClient(process.env.SUPABASE_URL, clientKey, {
   auth: { persistSession: false, autoRefreshToken: false }
-});
+}) : null;
 const json = (res, status, body) => { res.setHeader('Cache-Control', 'no-store'); return res.status(status).json(body); };
 function sessionCookies(res, session) {
   res.setHeader('Set-Cookie', [
@@ -26,6 +27,7 @@ module.exports = async function handler(req, res) {
       const username = String(body.username || '').trim();
       const password = String(body.password || '');
       if (!username || !password) return json(res, 400, { error: 'اسم المستخدم وكلمة المرور مطلوبان' });
+      if (!client) return json(res, 503, { error: 'مصادقة Supabase غير مهيأة على الخادم' });
       const { data: profile, error: profileError } = await admin.from('user_profiles')
         .select('auth_user_id, email, active').eq('employee_number', username).maybeSingle();
       if (profileError) throw profileError;
