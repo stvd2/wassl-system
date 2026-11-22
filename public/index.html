@@ -306,7 +306,7 @@ let REALTIME_CHANNEL = null;
 let REALTIME_REFRESH_TIMER = null;
 let REALTIME_POLL_TIMER = null;
 let REALTIME_REFRESHING = false;
-const SYNC_CHANNEL = ('BroadcastChannel' in window) ? new BroadcastChannel('wasl_v9_sync_channel') : null;
+const SYNC_CHANNEL = ('BroadcastChannel' in window) ? new BroadcastChannel('wasl_sync_channel') : null;
 let LOCAL_CHANGE_AT = '';
 let LAST_REMOTE_REVISION = 0;
 let LIST_PAGE = 1;
@@ -426,7 +426,6 @@ async function preloadLogos(force = false) {
   return LOGO_PRELOAD_PROMISE;
 }
 
-const CANCEL_REASONS = ['طلب المريض','تحسن حالة المريض','وفاة المريض','نقل لمستشفى آخر','خطأ في التسجيل','أخرى'];
 const REFERRAL_TYPES = ['طارئ', 'تنويم عادي', 'عيادات', 'استشارة طبية'];
 const REFERRAL_TYPE_META = {
   'طارئ':         { label: 'طارئ',          icon: '🚨', color: '#b91c1c', chip: 't-er', admission: 'قبول للتنويم' },
@@ -460,7 +459,7 @@ const fmtDate = iso => iso ? new Date(iso).toLocaleString('ar-SA', { dateStyle: 
 const roleLabel = r => ({ coordinator: 'منسق الإحالات', doctor: 'طبيب', beds: 'إدارة الأسرة', admin: 'مدير النظام', pending: 'بانتظار الموافقة' }[r] || r);
 const fmtSize = b => { if (!b) return '0 B'; if (b > 1048576) return (b/1048576).toFixed(1)+' م.ب'; if (b > 1024) return Math.round(b/1024)+' ك.ب'; return b+' B'; };
 const refNoOf = r => (r.ref_no || r.id || '');
-const isDirectER = r => r && r.ward_type === 'طوارئ' && (r.emergency_admission === true || r.admission_type === 'قبول طوارئ');
+const isDirectER = r => r && r.ward_type === 'طوارئ' && r.emergency_admission === true;
 const isConsultation = r => r && r.priority === 'استشارة طبية';
 const typeMetaOf = r => REFERRAL_TYPE_META[r.priority] || { label: r.priority || '—', icon: '📄', chip: '', color: '#475569' };
 const typeChip = r => {
@@ -500,7 +499,7 @@ function deobfuscate(encoded) {
 }
 
 // ═══════════════════════════════════════════════════════════════════
-// مسار الإحالة متعدد الأقسام (v9.1)
+// مسار الإحالة متعدد الأقسام
 // ═══════════════════════════════════════════════════════════════════
 const targetSpecialtyOf = r => (r.target_specialty || r.specialty || '—');
 
@@ -611,23 +610,26 @@ async function attsPut(id, blob) {
 }
 async function attsGet(id) {
   const db = await openAttsDB();
-  const local = await new Promise((res, rej) => {
+  // المصدر المشترك أولاً حتى لا تعرض نسخة IndexedDB قديمة على جهاز آخر.
+  try {
+    const remote = await fetch(API_BASE + '/api/attachment?id=' + encodeURIComponent(id), { cache: 'no-store' });
+    if (remote.ok) {
+      const blob = await remote.blob();
+      try { await new Promise((res, rej) => {
+        const tx = db.transaction('attachments', 'readwrite');
+        tx.objectStore('attachments').put({ id, blob });
+        tx.oncomplete = () => res();
+        tx.onerror = () => rej(tx.error);
+      }); } catch (e) {}
+      return blob;
+    }
+  } catch (e) { /* fallback إلى النسخة المحلية عند انقطاع الشبكة */ }
+  return await new Promise((res, rej) => {
     const tx = db.transaction('attachments', 'readonly');
     const req = tx.objectStore('attachments').get(id);
     req.onsuccess = () => res(req.result ? req.result.blob : null);
     req.onerror = () => rej(req.error);
   });
-  if (local) return local;
-  const remote = await fetch(API_BASE + '/api/attachment?id=' + encodeURIComponent(id), { cache: 'no-store' });
-  if (!remote.ok) return null;
-  const blob = await remote.blob();
-  try { await new Promise((res, rej) => {
-    const tx = db.transaction('attachments', 'readwrite');
-    tx.objectStore('attachments').put({ id, blob });
-    tx.oncomplete = () => res();
-    tx.onerror = () => rej(tx.error);
-  }); } catch (e) {}
-  return blob;
 }
 
 // ═══════════════════════════════════════════════════════════════════
@@ -827,15 +829,24 @@ async function pushStateSnapshot() {
   if (res.status === 409) {
     const latest = await loadData();
     if (latest) {
-      DATA = latest;
+      // دمج تعديلات العناصر غير المتعارضة ثم إعادة المحاولة بإصدار الخادم الجديد.
+      DATA = mergeStateSnapshots(latest, snapshot);
       _syncBlocked = false;
+      const retry = await fetch(API_STATE, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(DATA), cache: 'no-store' });
+      if (!retry.ok) throw new Error(`فشل حفظ الدمج (${retry.status})`);
+      const merged = await retry.json();
+      if (merged?.data) {
+        DATA = merged.data;
+        LAST_REMOTE_REVISION = Number(merged.revision || DATA.meta?.sync_revision || 0);
+        try { localStorage.setItem(STORAGE_KEY, JSON.stringify(DATA)); } catch (e) {}
+      }
       if (CURRENT_USER) {
         const me = DATA.users.find(u => u.id === CURRENT_USER.id);
         if (me) CURRENT_USER = me;
         buildNav();
         showPage(PAGE);
       }
-      toast('تم جلب آخر تحديث من جهاز آخر؛ لم يُستبدل بالتعديل القديم.', 'warn');
+      toast('✓ تمت مزامنة التعديل مع أحدث نسخة', 'ok');
     }
     return;
   }
@@ -846,6 +857,25 @@ async function pushStateSnapshot() {
     DATA.meta.sync_revision = result.data.meta.sync_revision;
     try { localStorage.setItem(STORAGE_KEY, JSON.stringify(DATA)); } catch (e) {}
   }
+}
+function mergeStateSnapshots(latest, local) {
+  const merged = JSON.parse(JSON.stringify(latest || {}));
+  const arrayKeys = ['users', 'referrals', 'beds', 'audit', 'notifications', 'chats', 'shifts'];
+  for (const key of arrayKeys) {
+    const byId = new Map((merged[key] || []).map(item => [String(item.id ?? item.seq ?? ''), item]));
+    for (const item of (local?.[key] || [])) {
+      const id = String(item.id ?? item.seq ?? '');
+      if (!id) continue;
+      const current = byId.get(id);
+      const itemAt = String(item.updated_at || item.created_at || item.ts || '');
+      const currentAt = String(current?.updated_at || current?.created_at || current?.ts || '');
+      if (!current || itemAt > currentAt) byId.set(id, item);
+    }
+    merged[key] = Array.from(byId.values());
+  }
+  merged.attachments = { ...(latest?.attachments || {}), ...(local?.attachments || {}) };
+  merged.meta = { ...(latest?.meta || {}), ...(local?.meta || {}), sync_revision: Number(latest?.meta?.sync_revision || 0) };
+  return merged;
 }
 function syncToBackend() {
   if (_saveTimer) clearTimeout(_saveTimer);
@@ -1060,7 +1090,7 @@ function getUnreadNotifsForUser() {
 }
 
 // ═══════════════════════════════════════════════════════════════════
-// دورة v7.9
+// دورة الإحالة
 // ═══════════════════════════════════════════════════════════════════
 function transitionReferral(id, to, payload = {}) {
   const r = DATA.referrals.find(x => x.id === id);
@@ -2290,7 +2320,7 @@ function openDetail(id) {
     ${r.needed_info ? `<div class="panel" style="box-shadow:none;background:#fff8e9"><h3>📝 المطلوب استكماله</h3><p>${esc(r.needed_info)}</p></div>` : ''}
     ${r.supplement_notes ? `<div class="panel" style="box-shadow:none;background:#f0f6ff"><h3>↻ الاستكمال المُرسل</h3><p>${esc(r.supplement_notes)}</p></div>` : ''}
     ${r.doctor_decision === 'accepted' ? `<div class="panel" style="box-shadow:none;background:#e7f6ee"><h3>✓ رد الطبيب</h3><p><b>${esc(r.admission_type || 'قبول')}</b>${r.ward_type ? ' — ' + esc(r.ward_type) : ''}</p>${r.doctor_notes ? `<div style="margin-top:10px;padding:10px 12px;background:#fff;border-radius:8px"><p style="margin:0;line-height:1.7">${esc(r.doctor_notes)}</p></div>` : ''}</div>` : ''}
-    ${isDirectER(r) ? `<div class="panel" style="box-shadow:none;background:#fef2f2"><h3 style="color:var(--red)">🚨 قبول طوارئ مباشر</h3><p>بدون حجز سرير</p></div>` : ''}
+    ${isDirectER(r) ? `<div class="panel" style="box-shadow:none;background:#fef2f2"><h3 style="color:var(--red)">🚨 قبول للتنويم</h3><p>بدون حجز سرير</p></div>` : ''}
     ${r.bed_number ? `<div class="panel" style="box-shadow:none;background:#f8f5ff"><h3>🛏 بيانات السرير</h3><div class="dgrid" style="margin:0"><div class="d"><small>الرقم</small><strong>${esc(r.bed_number)}</strong></div><div class="d"><small>النوع</small><strong>${esc(r.bed_type || '—')}</strong></div><div class="d"><small>القسم</small><strong>${esc(r.bed_ward || '—')}</strong></div><div class="d"><small>المدة</small><strong>${esc(r.bed_duration || '—')}</strong></div></div></div>` : ''}
     <div class="panel" style="box-shadow:none;margin:0 0 14px 0"><h3>📎 المرفقات (${atts.length})</h3>${attsHtml}</div>
     ${actionForms}
@@ -2445,7 +2475,7 @@ function onDoctorActionChange(sel) {
     const meta = REFERRAL_TYPE_META[priority];
     wrapper.innerHTML = `
       ${meta ? `<div class="field full"><div class="notice info" style="margin:0">✓ القبول كـ: <b>${meta.admission}</b>${needWard ? ' — اختر القسم' : ''}</div></div>` : ''}
-      ${priority === 'طارئ' ? `<div class="field full"><label>قبول الطوارئ؟ *</label><select name="emergency_accept" required onchange="onEmergencyDecisionChange(this)"><option value="">— اختر —</option><option value="نعم">نعم — قبول طوارئ مباشر</option><option value="لا">لا — رفض الطوارئ</option></select></div><div id="emergency-decision-fields" class="field full"></div>` : (needWard ? `<div class="field full"><label>القسم / نوع السرير *</label><input name="ward_type" list="bed-type-options" required placeholder="اكتب نوع السرير أو اختره"><datalist id="bed-type-options">${BED_TYPE_OPTIONS.map(o => `<option value="${esc(o)}">`).join('')}</datalist></div>` : `<input type="hidden" name="ward_type" value="">`)}
+      ${priority === 'طارئ' ? `<div class="field full"><label>قبول الطوارئ؟ *</label><select name="emergency_accept" required onchange="onEmergencyDecisionChange(this)"><option value="">— اختر —</option><option value="نعم">نعم — قبول للتنويم</option><option value="لا">لا — رفض الطوارئ</option></select></div><div id="emergency-decision-fields" class="field full"></div>` : (needWard ? `<div class="field full"><label>القسم / نوع السرير *</label><input name="ward_type" list="bed-type-options" required placeholder="اكتب نوع السرير أو اختره"><datalist id="bed-type-options">${BED_TYPE_OPTIONS.map(o => `<option value="${esc(o)}">`).join('')}</datalist></div>` : `<input type="hidden" name="ward_type" value="">`)}
       <div class="field full"><label>الجوال المسجل للطبيب</label><input type="tel" value="${esc(mobileVal)}" readonly aria-readonly="true"><input type="hidden" name="doctor_mobile" value="${esc(mobileVal)}"></div>
       <div class="field full"><label>ردك *</label><textarea name="notes" required style="min-height:110px"></textarea></div>`;
   } else if (v === 'doctor_rejected') {
@@ -2485,7 +2515,7 @@ function onEmergencyDecisionChange(sel) {
   const box = $('emergency-decision-fields');
   if (!box) return;
   if (sel.value === 'نعم') {
-    box.innerHTML = '<div class="notice success" style="margin:0">سيتم إرسال قبول الطوارئ مباشرة إلى المنسق للطباعة، ولن تظهر لإدارة الأسرة.</div><input type="hidden" name="ward_type" value="طوارئ">';
+    box.innerHTML = '<div class="notice success" style="margin:0">سيتم إرسال القبول للتنويم مباشرة إلى المنسق للطباعة، ولن تظهر لإدارة الأسرة.</div><input type="hidden" name="ward_type" value="طوارئ">';
   } else if (sel.value === 'لا') {
     box.innerHTML = '<div class="field"><label>سبب رفض الطوارئ *</label><textarea name="emergency_rejection_reason" required style="min-height:90px"></textarea></div><input type="hidden" name="ward_type" value="طوارئ">';
   } else box.innerHTML = '';
@@ -2894,7 +2924,7 @@ function buildPrintDocument(tpl, d) {
     content = `<table class="tmpl-table"><tr class="tbl-header"><td>Physician Response &amp; Admission Plan / رد الطبيب وخطة التنويم</td></tr><tr><td style="padding:4px;"><span class="val-title">${escH(d.clinicalText)}</span></td></tr></table>${doctorBlock}
       <table class="tmpl-table"><tr class="tbl-header"><td colspan="4">Bed Management &amp; Admission / إدارة وتوفر الأسرة</td></tr>
         <tr><td><span class="label-title">توفر السرير / Bed Availability</span><span class="val-title">${escH(d.bedAvail)}</span></td>
-          <td><span class="label-title">قبول طوارئ / Emergency</span><span class="val-title">${escH(d.bedEmergency)}</span></td>
+          <td><span class="label-title">قبول للتنويم / Emergency</span><span class="val-title">${escH(d.bedEmergency)}</span></td>
           <td><span class="label-title">نوع السرير / Bed Type</span><span class="val-title">${escH(d.bedType)}</span></td>
           <td><span class="label-title">رقم الغرفة / Room No</span><span class="val-title">${escH(d.bedRoomNo)}</span></td></tr>
         <tr><td><span class="label-title">القسم / Dept</span><span class="val-title">${escH(d.bedDept)}</span></td>

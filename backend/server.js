@@ -16,11 +16,6 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PORT = process.env.PORT || 3001;
 const SUPABASE_URL = process.env.SUPABASE_URL;
 const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
-// بيانات توثيق داخلية للخادم فقط؛ لا تُعاد من أي endpoint ولا تُضمّن في الواجهة.
-const SYSTEM_VERIFIER = Object.freeze({
-  name: 'عبد الله سالم جابر المالكي',
-  mobile: '0539352033'
-});
 
 if (!SUPABASE_URL || !SUPABASE_SERVICE_ROLE_KEY) {
   console.error('[WASL] خطأ: يجب تعبئة SUPABASE_URL و SUPABASE_SERVICE_ROLE_KEY في ملف .env');
