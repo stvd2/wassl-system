@@ -314,6 +314,7 @@ async function loadClientConfig() {
 }
 let DATA = null;
 let CURRENT_USER = null;
+let AUTH_REQUESTS = [];
 let PAGE = 'dashboard';
 let CURRENT_CHAT = null;
 let CHAT_TAB = 'direct';
@@ -1475,45 +1476,24 @@ function showRegister() {
     </div>`;
 }
 
-function doRegister(e) {
+async function doRegister(e) {
   e.preventDefault();
   const fd = new FormData(e.target);
-  const employeeNumber = (fd.get('employee_number') || '').trim();
-  const fullName = (fd.get('full_name') || '').trim();
-  const mobile = (fd.get('mobile') || '').trim();
-  const errEl = $('registerErr');
-  errEl.classList.add('hidden');
-  const showErr = msg => { errEl.textContent = '❌ ' + msg; errEl.classList.remove('hidden'); };
-
-  if (!employeeNumber) return showErr('رقم الوظيفي مطلوب');
-  if (!/^[a-zA-Z0-9_.-]{3,20}$/.test(employeeNumber)) return showErr('رقم الوظيفي: 3-20 حرف/رقم');
-  if (DATA.users.some(u => u.username.toLowerCase() === employeeNumber.toLowerCase() && !u.rejected)) return showErr('رقم الوظيفي مسجل مسبقاً');
-  if (!fullName || fullName.length < 3) return showErr('الاسم مطلوب');
-  const mobileErr = validateMobile(mobile);
-  if (mobileErr) return showErr(mobileErr);
-
-  const salt = randomHex(32);
-  const trackNo = generateTrackingNo();
-  const newUser = {
-    id: uid(), username: employeeNumber, salt, hash: hashPassword('PendingRegistration@000', salt),
-    pending_approval: true, tracking_no: trackNo, created_at: nowIso(),
-    must_change_password: true, password_history: [], password_changed_at: null,
-    failed_attempts: 0, locked_until: null, rejected: false, rejected_at: null, rejection_reason: null, department: null
-  };
-  DATA.users.push(newUser);
-  notifyRole('admin', null, `📝 طلب تسجيل: ${fullName} (${employeeNumber}) — ${trackNo}`, 'النظام');
-  saveData();
-  audit('user_registration_request', 'user', newUser.id, `${trackNo} — ${employeeNumber}`);
-
-  $('modalRoot').innerHTML = `
-    <div class="modal-back" onclick="if(event.target===this)closeModal()"><div class="modal" style="max-width:520px">
+  const payload = { employee_number: String(fd.get('employee_number') || '').trim(), full_name: String(fd.get('full_name') || '').trim(), mobile: String(fd.get('mobile') || '').replace(/[\s-]/g, '') };
+  const errEl = $('registerErr'); errEl.classList.add('hidden');
+  try {
+    const res = await fetch(API_BASE + '/api/auth-requests', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
+    const body = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(body.error || 'تعذر إرسال الطلب');
+    const request = body.request;
+    $('modalRoot').innerHTML = `<div class="modal-back" onclick="if(event.target===this)closeModal()"><div class="modal" style="max-width:520px">
       <div class="mh"><h3>✓ تم إرسال طلبك</h3><button class="ghost sm" onclick="closeModal()">✕</button></div>
-      <div style="text-align:center;padding:10px 0"><div style="font-size:52px;margin-bottom:8px">✅</div><div style="font-size:16px;font-weight:700;color:var(--navy)">طلبك قيد المراجعة</div></div>
-      <div class="notice success" style="text-align:center"><div style="font-size:11.5px;color:#475569;font-weight:700;margin-bottom:8px">📌 احتفظ برقم الطلب</div><div class="track-box">${esc(trackNo)}</div></div>
+      <div style="text-align:center;padding:10px 0"><div style="font-size:52px;margin-bottom:8px">✅</div><div style="font-size:16px;font-weight:700;color:var(--navy)">طلبك قيد مراجعة المدير</div></div>
+      <div class="notice success" style="text-align:center"><div style="font-size:11.5px;color:#475569;font-weight:700;margin-bottom:8px">📌 رقم الطلب</div><div class="track-box">${esc(request.tracking_no)}</div></div>
       <button class="primary" onclick="closeModal()" style="width:100%;margin-top:14px">حسناً</button>
     </div></div>`;
+  } catch (err) { errEl.textContent = '❌ ' + err.message; errEl.classList.remove('hidden'); }
 }
-
 function showTrackRequest(prefillTrackNo) {
   $('modalRoot').innerHTML = `
     <div class="modal-back" onclick="if(event.target===this)closeModal()"><div class="modal" style="max-width:520px">
@@ -1549,61 +1529,30 @@ function doTrackRequest(e) {
   </div></div>`;
 }
 
-function approveUser(id) {
-  const u = DATA.users.find(x => x.id === id);
-  if (!u) return;
-  const tempPass = 'Wsl@' + Math.floor(100000 + Math.random() * 900000);
+async function approveUser(id) {
+  const u = AUTH_REQUESTS.find(x => x.id === id); if (!u) return;
+  const tempPass = 'Wsl!' + crypto.getRandomValues(new Uint32Array(3)).join('').slice(0, 14);
   $('modalRoot').innerHTML = `<div class="modal-back" onclick="if(event.target===this)closeModal()"><div class="modal" style="max-width:520px">
     <div class="mh"><h3>✓ الموافقة على التسجيل</h3><button class="ghost sm" onclick="closeModal()">✕</button></div>
-    <div class="notice info"><b>${esc(u.full_name)}</b><br>${esc(u.username)}<br>${esc(u.mobile || '')}</div>
-    <div id="approveErr" class="notice danger hidden"></div>
-    <form onsubmit="completeApproval(event, '${u.id}')">
-      <div class="field"><label>الدور *</label><select name="role" required><option value="">— اختر —</option><option value="coordinator">منسق</option><option value="doctor">طبيب</option><option value="beds">إدارة أسرة</option><option value="admin">مدير</option></select></div>
-      <div class="field"><label>القسم (للأطباء فقط)</label><select name="department"><option value="">—</option>${DEPARTMENTS.map(d => `<option value="${esc(d)}">${esc(d)}</option>`).join('')}</select></div>
-      <div class="field"><label>كلمة المرور المؤقتة *</label><input name="temp_password" required minlength="8" value="${esc(tempPass)}"></div>
-      <div style="display:flex;gap:8px;margin-top:14px"><button class="success" type="submit" style="flex:1">✓ تفعيل</button><button class="danger" type="button" onclick="rejectRegistration('${u.id}')">✕ رفض</button></div>
-    </form>
+    <div class="notice info"><b>${esc(u.full_name)}</b><br>${esc(u.employee_number)}<br>${esc(u.mobile)}</div><div id="approveErr" class="notice danger hidden"></div>
+    <form onsubmit="completeApproval(event, '${u.id}')"><div class="field"><label>الدور *</label><select name="role" required><option value="">— اختر —</option><option value="coordinator">منسق</option><option value="doctor">طبيب</option><option value="beds">إدارة أسرة</option><option value="admin">مدير</option></select></div>
+    <div class="field"><label>القسم (للأطباء فقط)</label><select name="department"><option value="">—</option>${DEPARTMENTS.map(d => `<option value="${esc(d)}">${esc(d)}</option>`).join('')}</select></div>
+    <div class="field"><label>كلمة المرور المؤقتة (اختياري)</label><input name="temp_password" minlength="12" value="${esc(tempPass)}"></div>
+    <div style="display:flex;gap:8px;margin-top:14px"><button class="success" type="submit" style="flex:1">✓ تفعيل</button><button class="danger" type="button" onclick="rejectRegistration('${u.id}')">✕ رفض</button></div></form>
   </div></div>`;
 }
-
-function completeApproval(e, id) {
-  e.preventDefault();
-  const u = DATA.users.find(x => x.id === id);
-  if (!u) return;
-  const d = Object.fromEntries(new FormData(e.target));
-  const pwErrors = validatePasswordPolicy(d.temp_password, u.username);
-  const errEl = $('approveErr');
-  if (pwErrors.length) { errEl.textContent = '❌ ' + pwErrors.join(' • '); errEl.classList.remove('hidden'); return; }
-  if (d.role === 'doctor' && !d.department) { errEl.textContent = '❌ القسم مطلوب للأطباء'; errEl.classList.remove('hidden'); return; }
-  const salt = randomHex(32);
-  u.salt = salt; u.hash = hashPassword(d.temp_password, salt);
-  u.role = d.role;
-  u.department = d.role === 'doctor' ? d.department : null;
-  u.active = true; u.pending_approval = false; u.rejected = false;
-  u.must_change_password = true; u.password_changed_at = nowIso();
-  saveData();
-  audit('user_approved', 'user', id, u.username);
-  toast('✓ تم التفعيل', 'ok');
-  $('modalRoot').innerHTML = `<div class="modal-back" onclick="if(event.target===this){closeModal();if(PAGE==='users')renderUsers()}"><div class="modal" style="max-width:480px">
-    <div class="mh"><h3>✓ بيانات الدخول</h3><button class="ghost sm" onclick="closeModal()">✕</button></div>
-    <div class="dgrid" style="grid-template-columns:1fr 1fr">
-      <div class="d"><small>المستخدم</small><strong>${esc(u.username)}</strong></div>
-      <div class="d"><small>كلمة المرور</small><strong>${esc(d.temp_password)}</strong></div>
-    </div>
-    <button class="primary" onclick="navigator.clipboard.writeText('User: ${esc(u.username)}\\nPass: ${esc(d.temp_password)}').then(()=>toast('تم النسخ','ok'))" style="width:100%">📋 نسخ</button>
-  </div></div>`;
+async function completeApproval(e, id) {
+  e.preventDefault(); const d = Object.fromEntries(new FormData(e.target)); const err = $('approveErr'); err.classList.add('hidden');
+  try {
+    const res = await fetch(API_BASE + '/api/auth-requests-approve', { method: 'POST', headers: {'Content-Type':'application/json'}, credentials:'same-origin', body: JSON.stringify({ id, role:d.role, department:d.department, temp_password:d.temp_password }) });
+    const body = await res.json().catch(() => ({})); if (!res.ok) throw new Error(body.error || 'تعذر اعتماد الطلب');
+    AUTH_REQUESTS = AUTH_REQUESTS.filter(x => x.id !== id);
+    $('modalRoot').innerHTML = `<div class="modal-back" onclick="if(event.target===this){closeModal();renderUsers()}"><div class="modal" style="max-width:480px"><div class="mh"><h3>✓ تم إنشاء الحساب</h3><button class="ghost sm" onclick="closeModal();renderUsers()">✕</button></div><div class="notice success">سلّم الموظف هذه البيانات عبر قناة آمنة، وسيُجبر على تغيير كلمة المرور عند أول دخول.</div><div class="dgrid" style="grid-template-columns:1fr 1fr"><div class="d"><small>رقم الموظف</small><strong>${esc(body.user.employee_number)}</strong></div><div class="d"><small>كلمة المرور المؤقتة</small><strong>${esc(body.temporary_password)}</strong></div></div><button class="primary" onclick="navigator.clipboard.writeText('Employee: ${esc(body.user.employee_number)}\nPass: ${esc(body.temporary_password)}').then(()=>toast('تم النسخ','ok'))" style="width:100%">📋 نسخ</button></div></div>`;
+  } catch (e) { err.textContent = '❌ ' + e.message; err.classList.remove('hidden'); }
 }
-
-function rejectRegistration(id) {
-  const u = DATA.users.find(x => x.id === id);
-  if (!u) return;
-  const reason = prompt(`سبب الرفض لـ "${u.full_name}":`, 'بيانات غير مكتملة');
-  if (reason === null) return;
-  u.pending_approval = false; u.rejected = true; u.rejected_at = nowIso();
-  u.rejection_reason = reason; u.active = false;
-  saveData(); audit('user_registration_rejected', 'user', id, u.username);
-  closeModal(); toast('✓ تم الرفض', 'ok');
-  if (PAGE === 'users') renderUsers();
+async function rejectRegistration(id) {
+  const reason = prompt('سبب الرفض:', 'بيانات غير مكتملة'); if (reason === null) return;
+  try { const res = await fetch(API_BASE + '/api/auth-requests', { method:'PATCH', headers:{'Content-Type':'application/json'}, credentials:'same-origin', body:JSON.stringify({id,status:'rejected',reason}) }); const body=await res.json().catch(()=>({})); if(!res.ok) throw new Error(body.error || 'تعذر رفض الطلب'); AUTH_REQUESTS=AUTH_REQUESTS.filter(x=>x.id!==id); closeModal(); toast('✓ تم رفض الطلب','ok'); renderUsers(); } catch(e) { toast('❌ '+e.message,'err'); }
 }
 
 function deleteRejectedUser(id) {
@@ -1664,7 +1613,7 @@ async function doLogout() {
 }
 
 function forgotPassword() {
-  $('modalRoot').innerHTML = `<div class="modal-back" onclick="if(event.target===this)closeModal()"><div class="modal"><div class="mh"><h3>🔐 استعادة كلمة المرور</h3><button class="ghost sm" onclick="closeModal()">✕</button></div><div class="notice info">تُرسل إعادة التعيين عبر Supabase Auth إلى البريد المسجل للحساب. لا يمكن للنظام عرض كلمة المرور الحالية أو استعادتها.</div><button class="primary" style="width:100%" onclick="closeModal()">حسنًا</button></div></div>`;
+  $('modalRoot').innerHTML = `<div class="modal-back" onclick="if(event.target===this)closeModal()"><div class="modal"><div class="mh"><h3>🔐 استعادة كلمة المرور</h3><button class="ghost sm" onclick="closeModal()">✕</button></div><div class="notice info">تواصل مع مدير النظام لإصدار كلمة مرور مؤقتة جديدة. لا يعرض النظام كلمات المرور الحالية أو يستعيدها.</div><button class="primary" style="width:100%" onclick="closeModal()">حسنًا</button></div></div>`;
 }
 
 function enterApp() {
@@ -1682,7 +1631,17 @@ function enterApp() {
 }
 
 function showChangePassword(force = false) {
-  $('modalRoot').innerHTML = `<div class="modal-back" ${force ? '' : 'onclick="if(event.target===this)closeModal()"'}><div class="modal"><div class="mh"><h3>🔑 تغيير كلمة المرور</h3>${force ? '' : '<button class="ghost sm" onclick="closeModal()">✕</button>'}</div><div class="notice info">تغيير كلمة المرور يتم عبر Supabase Auth ولا تُخزّن كلمة المرور في حالة التطبيق.</div>${force ? '<button class="ghost" onclick="doLogout()">خروج</button>' : '<button class="primary" onclick="closeModal()">إغلاق</button>'}</div></div>`;
+  $('modalRoot').innerHTML = `<div class="modal-back" ${force ? '' : 'onclick="if(event.target===this)closeModal()"'}><div class="modal" style="max-width:520px"><div class="mh"><h3>🔑 تغيير كلمة المرور</h3>${force ? '' : '<button class="ghost sm" onclick="closeModal()">✕</button>'}</div><div class="notice info">يجب تغيير كلمة المرور المؤقتة قبل استخدام النظام. لا تُحفظ كلمة المرور في بيانات التطبيق.</div><div id="changePassErr" class="notice danger hidden"></div><form onsubmit="submitChangePassword(event)"><div class="field"><label>كلمة المرور الجديدة *</label><input name="password" type="password" minlength="12" required autocomplete="new-password"></div><div class="field"><label>تأكيد كلمة المرور *</label><input name="confirm" type="password" minlength="12" required autocomplete="new-password"></div><button class="primary" style="width:100%">حفظ كلمة المرور</button></form>${force ? '<button class="ghost" onclick="doLogout()" style="width:100%;margin-top:8px">خروج</button>' : ''}</div></div>`;
+}
+async function submitChangePassword(e) {
+  e.preventDefault();
+  const d = Object.fromEntries(new FormData(e.target)); const err = $('changePassErr'); err.classList.add('hidden');
+  if (d.password !== d.confirm) { err.textContent = '❌ كلمتا المرور غير متطابقتين'; err.classList.remove('hidden'); return; }
+  try {
+    const res = await fetch(API_BASE + '/api/password', { method: 'POST', headers: { 'Content-Type': 'application/json' }, credentials: 'same-origin', body: JSON.stringify({ password: d.password }) });
+    const body = await res.json().catch(() => ({})); if (!res.ok) throw new Error(body.error || 'تعذر تغيير كلمة المرور');
+    CURRENT_USER = body.user; closeModal(); toast('✓ تم تغيير كلمة المرور', 'ok'); showPage('dashboard');
+  } catch (e) { err.textContent = '❌ ' + e.message; err.classList.remove('hidden'); }
 }
 function resetUserPassword() { toast('إعادة التعيين متاحة عبر لوحة Supabase Auth فقط', 'warn'); }
 
@@ -2939,53 +2898,13 @@ async function previewAtt(attId) {
 // ═══════════════════════════════════════════════════════════════════
 // المستخدمون
 // ═══════════════════════════════════════════════════════════════════
-function renderUsers() {
+async function renderUsers() {
   if (CURRENT_USER.role !== 'admin') return;
-  const allUsers = DATA.users;
-  const pending = allUsers.filter(u => u.pending_approval && !u.rejected);
-  const users = allUsers.filter(u => !u.pending_approval && !u.rejected);
-  const rejected = allUsers.filter(u => u.rejected);
-
-  const pendingRows = pending.map(u => `<tr>
-    <td><b>${esc(u.username)}</b></td><td>${esc(u.full_name)}</td>
-    <td style="direction:ltr;text-align:right">${esc(u.mobile || '—')}</td>
-    <td><button class="success xs" onclick="approveUser('${u.id}')">✓</button> <button class="danger xs" onclick="rejectRegistration('${u.id}')">✕</button></td>
-  </tr>`).join('');
-  const rejectedRows = rejected.map(u => `<tr>
-    <td><b>${esc(u.username)}</b></td><td>${esc(u.full_name)}</td>
-    <td style="color:var(--red)">${esc(u.rejection_reason || '—')}</td>
-    <td><button class="ghost xs" onclick="deleteRejectedUser('${u.id}')">🗑</button></td>
-  </tr>`).join('');
-  const rows = users.map(u => {
-    const locked = u.locked_until && new Date(u.locked_until) > new Date();
-    return `<tr>
-      <td><b>${esc(u.username)}</b></td><td>${esc(u.full_name)}</td>
-      <td>${roleLabel(u.role)}${u.department ? ' — ' + esc(u.department) : ''}</td>
-      <td style="direction:ltr;text-align:right">${esc(u.mobile || '—')}</td>
-      <td>${u.active ? '<span class="pill p-done">نشط</span>' : '<span class="pill p-r">معطل</span>'}${locked ? ' <span class="pill p-warn">مقفل</span>' : ''}</td>
-      <td style="white-space:nowrap">
-        <button class="ghost xs" onclick="openEditUser('${u.id}')">✏ تعديل</button>
-        <button class="ghost xs" onclick="resetUserPassword('${u.id}')">🔑</button>
-        ${u.role !== 'doctor' && !u.mobile_locked ? `<button class="ghost xs" onclick="editUserMobile('${u.id}')">📱</button>` : ''}
-        ${locked ? `<button class="ghost xs" onclick="unlockUser('${u.id}')">🔓</button>` : ''}
-        ${u.username === 'admin' ? '' : `<button class="ghost xs" onclick="toggleUser('${u.id}')">${u.active ? 'تعطيل' : 'تفعيل'}</button><button class="danger xs" onclick="deleteUser('${u.id}')">🗑 حذف</button>`}
-      </td>
-    </tr>`;
-  }).join('');
-
-  $('content').innerHTML = `
-    ${pending.length ? `<div class="panel" style="border-right:4px solid var(--amber);background:#fffdf5"><h3 style="color:var(--amber)">⏳ طلبات معلقة (${pending.length})</h3><div class="twrap"><table class="t" style="min-width:600px"><thead><tr><th>المستخدم</th><th>الاسم</th><th>الجوال</th><th>إجراءات</th></tr></thead><tbody>${pendingRows}</tbody></table></div></div>` : ''}
-    <div class="panel"><h3>المستخدمون (${users.length})</h3><div class="twrap"><table class="t" style="min-width:800px"><thead><tr><th>المستخدم</th><th>الاسم</th><th>الدور</th><th>الجوال</th><th>الحالة</th><th>إجراءات</th></tr></thead><tbody>${rows}</tbody></table></div></div>
-    ${rejected.length ? `<div class="panel" style="border-right:4px solid var(--red);background:#fff8f8"><h3 style="color:var(--red)">❌ مرفوضة (${rejected.length})</h3><div class="twrap"><table class="t" style="min-width:600px"><thead><tr><th>المستخدم</th><th>الاسم</th><th>السبب</th><th></th></tr></thead><tbody>${rejectedRows}</tbody></table></div></div>` : ''}
-    <div class="panel"><h3>إضافة مستخدم</h3><form onsubmit="addUser(event)" class="grid2">
-      <div class="field"><label>المستخدم *</label><input name="username" required pattern="[a-zA-Z0-9_.-]+"></div>
-      <div class="field"><label>الاسم *</label><input name="full_name" required></div>
-      <div class="field"><label>كلمة المرور *</label><input name="password" type="password" required minlength="8"></div>
-      <div class="field"><label>الجوال *</label><input name="mobile" type="tel" required placeholder="05xxxxxxxx" pattern="05[0-9]{8}"></div>
-      <div class="field"><label>الدور *</label><select name="role" id="newUserRole" onchange="document.getElementById('newUserDeptField').style.display=this.value==='doctor'?'grid':'none'"><option value="coordinator">منسق</option><option value="doctor">طبيب</option><option value="beds">إدارة أسرة</option><option value="admin">مدير</option></select></div>
-      <div class="field" id="newUserDeptField" style="display:none"><label>القسم (للأطباء)</label><select name="department"><option value="">—</option>${DEPARTMENTS.map(d => `<option value="${esc(d)}">${esc(d)}</option>`).join('')}</select></div>
-      <div class="full"><button class="primary">إضافة</button></div>
-    </form></div>`;
+  try { const res = await fetch(API_BASE + '/api/auth-requests', { credentials:'same-origin', cache:'no-store' }); if (res.ok) AUTH_REQUESTS = (await res.json()).requests || []; } catch (e) { console.warn('auth requests', e); }
+  const users = DATA.users.filter(u => !u.pending_approval && !u.rejected);
+  const pendingRows = AUTH_REQUESTS.map(u => `<tr><td><b>${esc(u.employee_number)}</b></td><td>${esc(u.full_name)}</td><td style="direction:ltr;text-align:right">${esc(u.mobile)}</td><td><button class="success xs" onclick="approveUser('${u.id}')">✓ اعتماد</button> <button class="danger xs" onclick="rejectRegistration('${u.id}')">✕ رفض</button></td></tr>`).join('');
+  const rows = users.map(u => { const locked=u.locked_until && new Date(u.locked_until)>new Date(); return `<tr><td><b>${esc(u.username || u.employee_number || '—')}</b></td><td>${esc(u.full_name)}</td><td>${roleLabel(u.role)}${u.department?' — '+esc(u.department):''}</td><td style="direction:ltr;text-align:right">${esc(u.mobile || '—')}</td><td>${u.active?'<span class="pill p-done">نشط</span>':'<span class="pill p-r">معطل</span>'}${locked?' <span class="pill p-warn">مقفل</span>':''}</td><td style="white-space:nowrap"><button class="ghost xs" onclick="openEditUser('${u.id}')">✏ تعديل</button>${locked?`<button class="ghost xs" onclick="unlockUser('${u.id}')">🔓</button>`:''}${u.username==='admin'?'':`<button class="ghost xs" onclick="toggleUser('${u.id}')">${u.active?'تعطيل':'تفعيل'}</button><button class="danger xs" onclick="deleteUser('${u.id}')">🗑 حذف</button>`}</td></tr>`; }).join('');
+  $('content').innerHTML = `${AUTH_REQUESTS.length ? `<div class="panel" style="border-right:4px solid var(--amber);background:#fffdf5"><h3 style="color:var(--amber)">⏳ طلبات التسجيل المعلقة (${AUTH_REQUESTS.length})</h3><div class="twrap"><table class="t" style="min-width:600px"><thead><tr><th>رقم الموظف</th><th>الاسم</th><th>الجوال</th><th>إجراءات</th></tr></thead><tbody>${pendingRows}</tbody></table></div></div>` : ''}<div class="panel"><h3>المستخدمون (${users.length})</h3><div class="twrap"><table class="t" style="min-width:800px"><thead><tr><th>رقم الموظف</th><th>الاسم</th><th>الدور</th><th>الجوال</th><th>الحالة</th><th>إجراءات</th></tr></thead><tbody>${rows}</tbody></table></div></div>`;
 }
 
 function toggleUser(id) {
