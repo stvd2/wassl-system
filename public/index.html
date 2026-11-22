@@ -1147,12 +1147,23 @@ function transitionReferral(id, to, payload = {}) {
     notifyRole('beds', r.id, 'إحالة مقبولة — بانتظار قرار إدارة الأسرة', CURRENT_USER.full_name);
   }
   if (to === 'bed_approved') {
-    if (!payload.bed_number || !payload.bed_number.trim()) return { ok: false, error: 'رقم السرير إلزامي' };
+    if (payload.bed_available && payload.bed_available !== 'نعم') return { ok: false, error: 'لا يمكن قبول الإحالة دون توفر السرير' };
+    if (!payload.bed_number || !payload.bed_number.trim()) return { ok: false, error: 'رقم الغرفة إلزامي' };
     const bedNum = payload.bed_number.trim();
     const bed = DATA.beds.find(b => b.number === bedNum);
-    if (!bed) return { ok: false, error: `السرير ${bedNum} غير مسجّل في النظام — اختر سريراً من القائمة` };
+    if (!bed) return { ok: false, error: `رقم الغرفة ${bedNum} غير مسجّل في إدارة الأسرّة` };
     if (!bed.available) return { ok: false, error: `السرير ${bed.number} مشغول حالياً` };
-    Object.assign(bed, { available: false, current_patient: r.patient_name, current_referral: r.id, updated_at: nowIso() });
+    Object.assign(bed, {
+      available: false, current_patient: r.patient_name, current_referral: r.id,
+      ward: (payload.bed_ward || bed.ward || '').trim(),
+      type: (payload.bed_type || bed.type || '').trim(),
+      admission_date: payload.admission_date || bed.admission_date || '',
+      acceptance_date: payload.acceptance_date || bed.acceptance_date || '',
+      reservation_duration: (payload.bed_duration || bed.reservation_duration || '').trim(),
+      duration: (payload.bed_duration || bed.duration || '').trim(),
+      notes: payload.notes || bed.notes || '', employee_id: CURRENT_USER.username,
+      employee_name: CURRENT_USER.full_name, updated_at: nowIso()
+    });
     r.bed_id = bed.id;
     r.bed_number = bed.number;
     r.bed_type = bed.type || '';
@@ -2531,13 +2542,15 @@ function renderActionForm(r, action) {
   }
   if (action.to === 'resubmitted') fields = `<div class="field full"><label>ملخص الاستكمال *</label><textarea name="notes" required></textarea></div>`;
   else if (action.to === 'bed_approved') {
-    const availBeds = DATA.beds.filter(b => b.available);
-    const bedOptions = availBeds.length
-      ? '<option value="">— اختر السرير —</option>' + availBeds.map(b => `<option value="${esc(b.number)}">${esc(b.number)} — ${esc(b.type)} — ${esc(b.ward)}</option>`).join('')
-      : '<option value="">⚠ لا توجد أسرة شاغرة</option>';
-    fields = `<div class="field"><label>السرير *</label><select name="bed_number" required>${bedOptions}</select></div>
-      <div class="field"><label>مدة الحجز</label><input name="bed_duration" placeholder="مثال: 3 أيام"></div>
-      <div class="field full"><label>ملاحظات</label><input name="notes"></div>`;
+    fields = `<div class="field"><label>توفر السرير *</label><select name="bed_available" required><option value="نعم">نعم</option><option value="لا">لا</option></select></div>
+      <div class="field"><label>نوع السرير *</label><input name="bed_type" list="workflow-bed-types" placeholder="اكتب النوع أو اختره" required><datalist id="workflow-bed-types">${BED_TYPE_OPTIONS.map(x => `<option value="${esc(x)}">`).join('')}</datalist></div>
+      <div class="field"><label>القسم *</label><input name="bed_ward" placeholder="مثال: عناية مركزة" required></div>
+      <div class="field"><label>رقم الغرفة *</label><input name="bed_number" required placeholder="اكتب رقم الغرفة"></div>
+      <div class="field"><label>تاريخ دخول المريض</label><input type="date" name="admission_date"></div>
+      <div class="field"><label>تاريخ القبول</label><input type="date" name="acceptance_date"></div>
+      <div class="field"><label>مدة حجز السرير</label><input name="bed_duration" placeholder="مثال: 6 ساعات، 3 أيام"></div>
+      <div class="field"><label>الموظف الموثق</label><input value="${esc(CURRENT_USER.full_name)} — ${esc(CURRENT_USER.username)}" readonly aria-readonly="true"></div>
+      <div class="field full"><label>ملاحظات</label><textarea name="notes" placeholder="ملاحظات إضافية"></textarea></div>`;
   }
   else if (action.to === 'bed_rejected') fields = `<div class="field full"><label>سبب الرفض *</label><select name="reason" required><option value="">— اختر —</option><option>لا يوجد سرير شاغر</option><option>القسم ممتلئ</option><option>نوع غير متوافق</option><option>يحتاج تقييم</option><option>أخرى</option></select></div>`;
   else if (action.to === 'completed') fields = `<div class="field full"><label>ملاحظات الإغلاق</label><textarea name="notes"></textarea></div>`;
