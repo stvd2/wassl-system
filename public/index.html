@@ -1,6 +1,7 @@
 <!doctype html>
 <html lang="ar" dir="rtl">
 <head>
+<meta name="wasl-build" content="20261122-sync-import-1">
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>وصل | نظام إدارة الإحالات الطبية</title>
@@ -119,6 +120,7 @@ table.t tr:hover td{background:#fafcfc}
 .notif-item{display:flex;gap:12px;padding:14px;border-bottom:1px solid var(--line);background:#fff;cursor:pointer;transition:background .15s}
 .notif-item:hover{background:#f7f9fa}
 .notif-item.unread{background:#e8f4f8;border-right:3px solid var(--teal)}
+.notif-item.emergency{background:#fff0f0;border-right:4px solid #b91c1c}
 .notif-item .icon{width:38px;height:38px;border-radius:50%;display:grid;place-items:center;flex:none;font-size:17px}
 .actor-badge{display:inline-block;padding:3px 10px;border-radius:12px;font-size:11px;font-weight:600;background:#e0e9f5;color:#123047;margin-right:8px}
 .pw-bar{height:6px;background:#eef2f4;border-radius:3px;margin-top:6px;overflow:hidden}
@@ -274,6 +276,7 @@ input[dir="ltr"],select[dir="ltr"],textarea[dir="ltr"],.ltr{direction:ltr;text-a
       <button class="ghost sm" onclick="doLogout()">خروج</button>
     </div>
   </header>
+  <div id="syncWarning" role="status" class="hidden" style="padding:10px 18px;background:#fff2d9;color:#8a3610;font-weight:700;border-bottom:1px solid #eab77c"></div>
   <div class="layout">
     <aside><div id="navArea"></div></aside>
     <main id="main"></main>
@@ -289,6 +292,8 @@ input[dir="ltr"],select[dir="ltr"],textarea[dir="ltr"],.ltr{direction:ltr;text-a
 // ═══════════════════════════════════════════════════════════════════
 const STORAGE_KEY = 'wasl_v6';
 const SESSION_KEY = 'wasl_session_v6';
+// Per-tab journal survives refresh without overwriting another tab's pending edits.
+const PENDING_SYNC_KEY = 'wasl_pending_sync_v1';
 const PAGE_SESSION_KEY = 'wasl_page_v6';
 const LOGO_STORAGE_KEY = 'wasl_logos_cache_v1';
 // عنوان الخادم الوسيط (Node/Express + Supabase) — يمكن تجاوزه عبر window.WASL_API_BASE
@@ -296,6 +301,8 @@ const API_BASE = (window.WASL_API_BASE || '').replace(/\/$/, '');
 const API_STATE = API_BASE + '/api/state';
 const API_IMPORT = API_BASE + '/api/import';
 const FREE_QUOTA_KB = 512000;
+// 4 MiB stays below Vercel Functions' 4.5 MB request-body limit.
+const ATTACHMENT_MAX_BYTES = 4 * 1024 * 1024;
 const SUPABASE_PUBLIC_URL = 'https://rtnzxmedlmymtgyzgmhp.supabase.co';
 const SUPABASE_PUBLISHABLE_KEY = 'sb_publishable_mROaMe2BCRBDcwkxExZgRQ_kMTpL2E1';
 let DATA = null;
@@ -310,6 +317,10 @@ let REALTIME_REFRESHING = false;
 const SYNC_CHANNEL = ('BroadcastChannel' in window) ? new BroadcastChannel('wasl_sync_channel') : null;
 let LOCAL_CHANGE_AT = '';
 let LAST_REMOTE_REVISION = 0;
+let CONFIRMED_STATE = null;
+let LOCAL_CHANGE_SERIAL = 0;
+let CONFIRMED_CHANGE_SERIAL = 0;
+let RECOVERED_SYNC_ERROR = '';
 let LIST_PAGE = 1;
 const LIST_PAGE_SIZE = 10;
 let LIST_QUERY = '';
@@ -322,17 +333,22 @@ function canPrint() {
 }
 
 async function refreshFromRealtime() {
-  if (REALTIME_REFRESHING) return;
+  if (REALTIME_REFRESHING || _syncBlocked || ACTIVE_ATTACHMENT_UPLOADS || LOCAL_CHANGE_SERIAL !== CONFIRMED_CHANGE_SERIAL) return;
   REALTIME_REFRESHING = true;
   try {
     const next = await loadData();
     if (!next) return;
+    if (_syncBlocked || ACTIVE_ATTACHMENT_UPLOADS || LOCAL_CHANGE_SERIAL !== CONFIRMED_CHANGE_SERIAL) return;
     const remoteRevision = Number(next.meta?.sync_revision || 0);
     const localRevision = Number(DATA?.meta?.sync_revision || 0);
     const remoteAt = String(next.meta?.local_updated_at || '');
     const localAt = String(DATA?.meta?.local_updated_at || LOCAL_CHANGE_AT || '');
-    if (remoteRevision < localRevision || (remoteRevision === localRevision && remoteAt && localAt && remoteAt < localAt)) return;
+    if (remoteRevision < localRevision || (remoteRevision === localRevision && remoteAt <= localAt)) return;
     DATA = next;
+    CONFIRMED_STATE = JSON.parse(JSON.stringify(next));
+    LAST_REMOTE_REVISION = remoteRevision;
+    LOCAL_CHANGE_AT = remoteAt;
+    try { localStorage.setItem(STORAGE_KEY, JSON.stringify(DATA)); } catch (e) {}
     if (CURRENT_USER) {
       const user = DATA.users.find(x => x.id === CURRENT_USER.id);
       if (user) {
@@ -340,7 +356,7 @@ async function refreshFromRealtime() {
         $('userName').textContent = CURRENT_USER.full_name;
         $('userRole').textContent = roleLabel(CURRENT_USER.role) + (CURRENT_USER.department ? ' — ' + CURRENT_USER.department : '');
         $('userAvatar').textContent = CURRENT_USER.full_name[0];
-        renderPage(PAGE);
+        refreshCurrentView();
       }
     }
   } catch (e) {
@@ -446,8 +462,7 @@ const WARD_OPTIONS = {
 const BED_TYPE_OPTIONS = ['طوارئ', 'سرير عادي', 'سرير عزل', 'سرير عناية مركزة'];
 
 const OBF_KEY_STORE = 'wasl_obf_key_v1';
-const SYSTEM_DOCUMENTED_BY = 'عبد الله سالم جابر المالكي';
-const SYSTEM_DOCUMENTED_MOBILE = '0539352033';
+// بيانات توثيق النظام محفوظة في ملف الخادم وليست ضمن واجهة المتصفح.
 const DEFAULT_MOBILES = {
   'admin': '0515468605', '1010': '0512345678', '1313': '0512345680',
   '1040': '0512345701', '1515': '0512345702', '1616': '0512345703', '1717': '0512345704',
@@ -578,6 +593,7 @@ function toast(msg, type) {
 let ATTS_DB = null;
 let ATTS_DB_PROMISE = null;
 let ATTS_DB_OK = false;
+let ACTIVE_ATTACHMENT_UPLOADS = 0;
 
 function openAttsDB() {
   if (ATTS_DB_PROMISE) return ATTS_DB_PROMISE;
@@ -596,29 +612,34 @@ function openAttsDB() {
   return ATTS_DB_PROMISE;
 }
 async function attsPut(id, blob) {
-  const db = await openAttsDB();
-  await new Promise((res, rej) => {
-    const tx = db.transaction('attachments', 'readwrite');
-    tx.objectStore('attachments').put({ id, blob });
-    tx.oncomplete = () => res();
-    tx.onerror = () => rej(tx.error);
-  });
-  const res = await fetch(API_BASE + '/api/attachment?id=' + encodeURIComponent(id), {
-    method: 'PUT',
-    headers: { 'Content-Type': blob.type || 'application/octet-stream' },
-    body: blob,
-    cache: 'no-store'
-  });
-  if (!res.ok) throw new Error(`فشل رفع المرفق (${res.status})`);
+  if (blob.size > ATTACHMENT_MAX_BYTES) throw new Error('الحد الحالي للمرفق 4 م.ب؛ الملفات الأكبر تتطلب مسار رفع مباشر وآمن');
+  ACTIVE_ATTACHMENT_UPLOADS++;
+  try {
+    const res = await fetch(API_BASE + '/api/attachment?id=' + encodeURIComponent(id), {
+      method: 'PUT',
+      headers: { 'Content-Type': blob.type || 'application/octet-stream' },
+      body: blob,
+      cache: 'no-store'
+    });
+    if (!res.ok) throw new Error(`فشل رفع المرفق (${res.status})`);
+    try {
+      const db = await openAttsDB();
+      await new Promise((resolve, reject) => {
+        const tx = db.transaction('attachments', 'readwrite');
+        tx.objectStore('attachments').put({ id, blob });
+        tx.oncomplete = () => resolve();
+        tx.onerror = () => reject(tx.error);
+      });
+    } catch (e) { console.warn('[WASL] تعذر حفظ نسخة محلية للمرفق:', e.message); }
+  } finally { ACTIVE_ATTACHMENT_UPLOADS--; }
 }
 async function attsGet(id) {
-  const db = await openAttsDB();
   // المصدر المشترك أولاً حتى لا تعرض نسخة IndexedDB قديمة على جهاز آخر.
   try {
     const remote = await fetch(API_BASE + '/api/attachment?id=' + encodeURIComponent(id), { cache: 'no-store' });
     if (remote.ok) {
       const blob = await remote.blob();
-      try { await new Promise((res, rej) => {
+      try { const db = await openAttsDB(); await new Promise((res, rej) => {
         const tx = db.transaction('attachments', 'readwrite');
         tx.objectStore('attachments').put({ id, blob });
         tx.oncomplete = () => res();
@@ -627,6 +648,8 @@ async function attsGet(id) {
       return blob;
     }
   } catch (e) { /* fallback إلى النسخة المحلية عند انقطاع الشبكة */ }
+  let db;
+  try { db = await openAttsDB(); } catch (e) { return null; }
   return await new Promise((res, rej) => {
     const tx = db.transaction('attachments', 'readonly');
     const req = tx.objectStore('attachments').get(id);
@@ -744,12 +767,12 @@ const TRANSITIONS = {
   resubmitted:       ['doctor_accepted', 'doctor_rejected', 'info_requested', 'consultation_done'],
   consultation_done: ['completed'],
   doctor_accepted:   ['awaiting_bed', 'completed'],
-  doctor_rejected:   [],
+  doctor_rejected:   ['completed'],
   awaiting_bed:      ['bed_approved', 'bed_rejected'],
   bed_approved:      ['completed'],
   bed_rejected:      ['awaiting_bed'],
   consulting:        [],
-  awaiting_final:    ['doctor_accepted', 'doctor_rejected', 'info_requested'],
+  awaiting_final:    ['doctor_accepted', 'doctor_rejected', 'info_requested', 'consultation_done'],
   completed:         [],
 };
 
@@ -766,13 +789,15 @@ const ACTION_PERMS = {
   'consultation_done→completed':       { roles: ['coordinator', 'admin'], label: 'إغلاق الاستشارة', btn: 'success', icon: '✓' },
   'doctor_accepted→awaiting_bed':      { roles: ['coordinator', 'admin'], label: 'توجيه الإحالة لإدارة الأسرة', btn: 'primary', icon: '→' },
   'doctor_accepted→completed':         { roles: ['coordinator', 'admin'], label: 'تنفيذ القبول وإغلاق الإحالة', btn: 'success', icon: '✓' },
+  'doctor_rejected→completed':         { roles: ['coordinator', 'admin'], label: 'إغلاق الإحالة المرفوضة', btn: 'success', icon: '✓' },
   'awaiting_bed→bed_approved':         { roles: ['beds', 'admin'], label: 'قبول طلب السرير', btn: 'success', icon: '✓' },
   'awaiting_bed→bed_rejected':         { roles: ['beds', 'admin'], label: 'رفض طلب السرير', btn: 'danger', icon: '✕' },
   'bed_approved→completed':            { roles: ['coordinator', 'admin'], label: 'إغلاق الإحالة', btn: 'success', icon: '✓' },
   'bed_rejected→awaiting_bed':         { roles: ['coordinator', 'admin'], label: 'إعادة الإرسال لإدارة الأسرة', btn: 'warn', icon: '↻' },
   'awaiting_final→doctor_accepted':    { roles: ['doctor'], label: 'قبول نهائي', btn: 'success', icon: '✓' },
   'awaiting_final→doctor_rejected':    { roles: ['doctor'], label: 'رفض نهائي', btn: 'danger', icon: '✕' },
-  'awaiting_final→info_requested':     { roles: ['doctor'], label: 'طلب استكمال', btn: 'warn', icon: '📝' }
+  'awaiting_final→info_requested':     { roles: ['doctor'], label: 'طلب استكمال', btn: 'warn', icon: '📝' },
+  'awaiting_final→consultation_done':  { roles: ['doctor'], label: 'إرسال تقرير الاستشارة', btn: 'primary', icon: '📋' }
 };
 
 // ═══════════════════════════════════════════════════════════════════
@@ -808,10 +833,6 @@ async function loadData() {
     throw new Error('البيانات المشتركة في الخادم غير صالحة أو بإصدار غير مدعوم');
   }
   if (!Number.isInteger(p.meta.sync_revision) || p.meta.sync_revision < 0) p.meta.sync_revision = 0;
-  LAST_REMOTE_REVISION = p.meta.sync_revision;
-  LOCAL_CHANGE_AT = p.meta.local_updated_at || '';
-  _syncBlocked = false;
-  try { localStorage.setItem(STORAGE_KEY, JSON.stringify(p)); } catch (e) {}
   return p;
 }
 
@@ -819,65 +840,155 @@ let _saveTimer = null;
 let _saveInFlight = Promise.resolve();
 let _syncBlocked = false;
 let _syncQueued = false;
+let _syncRetryTimer = null;
+function updateSyncWarning() {
+  const warning = $('syncWarning'); if (!warning) return;
+  if (_syncBlocked) {
+    warning.textContent = 'المزامنة متوقفة بسبب تعارض أو تعذر حفظ نسخة محلية. لا تُعد تنفيذ العمليات أو تغلق التبويب؛ تواصل مع مسؤول النظام.';
+    warning.classList.remove('hidden');
+  } else if (LOCAL_CHANGE_SERIAL !== CONFIRMED_CHANGE_SERIAL) {
+    warning.textContent = 'توجد تعديلات لم يؤكد الخادم حفظها بعد؛ اترك التبويب مفتوحًا حتى تختفي هذه الرسالة.';
+    warning.classList.remove('hidden');
+  } else warning.classList.add('hidden');
+}
+function blockSync() { _syncBlocked = true; updateSyncWarning(); }
 async function pushStateSnapshot() {
   if (_syncBlocked || !DATA?.meta) return;
-  if (!Number.isInteger(DATA.meta.sync_revision)) DATA.meta.sync_revision = 0;
   const snapshot = JSON.parse(JSON.stringify(DATA));
-  const res = await fetch(API_STATE, {
-    method: 'PUT',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(snapshot),
-    cache: 'no-store'
-  });
+  const serial = LOCAL_CHANGE_SERIAL;
+  const base = CONFIRMED_STATE || JSON.parse(JSON.stringify(snapshot));
+  const put = value => fetch(API_STATE, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(value), cache: 'no-store' });
+  let res = await put(snapshot);
   if (res.status === 409) {
     const latest = await loadData();
-    if (latest) {
-      // دمج تعديلات العناصر غير المتعارضة ثم إعادة المحاولة بإصدار الخادم الجديد.
-      DATA = mergeStateSnapshots(latest, snapshot);
-      _syncBlocked = false;
-      const retry = await fetch(API_STATE, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(DATA), cache: 'no-store' });
-      if (!retry.ok) throw new Error(`فشل حفظ الدمج (${retry.status})`);
-      const merged = await retry.json();
-      if (merged?.data) {
-        DATA = merged.data;
-        LAST_REMOTE_REVISION = Number(merged.revision || DATA.meta?.sync_revision || 0);
-        try { localStorage.setItem(STORAGE_KEY, JSON.stringify(DATA)); } catch (e) {}
-      }
-      if (CURRENT_USER) {
-        const me = DATA.users.find(u => u.id === CURRENT_USER.id);
-        if (me) CURRENT_USER = me;
-        buildNav();
-        showPage(PAGE);
-      }
-      toast('✓ تمت مزامنة التعديل مع أحدث نسخة', 'ok');
-    }
-    return;
+    if (!latest) throw new Error('تعذر قراءة النسخة الأحدث لحل التعارض');
+    let merged;
+    try { merged = mergeStateSnapshots(latest, snapshot, base); }
+    catch (e) { blockSync(); throw e; }
+    res = await put(merged);
+    if (res.status === 409) { blockSync(); throw new Error('تغيّرت البيانات مرة أخرى أثناء الدمج؛ بقيت النسخة المحلية محفوظة للمراجعة'); }
   }
   if (!res.ok) throw new Error(`فشل حفظ البيانات (${res.status})`);
   const result = await res.json();
-  if (result?.data?.meta && DATA.meta.sync_revision === snapshot.meta.sync_revision) {
-    LAST_REMOTE_REVISION = Number(result.data.meta.sync_revision || result.revision || LAST_REMOTE_REVISION);
-    DATA.meta.sync_revision = result.data.meta.sync_revision;
-    try { localStorage.setItem(STORAGE_KEY, JSON.stringify(DATA)); } catch (e) {}
+  if (!result?.data?.meta) throw new Error('لم يؤكد الخادم حفظ النسخة');
+  const serverData = result.data;
+  try {
+    DATA = LOCAL_CHANGE_SERIAL === serial ? serverData : mergeStateSnapshots(serverData, DATA, snapshot);
+  } catch (e) {
+    CONFIRMED_STATE = JSON.parse(JSON.stringify(serverData));
+    blockSync();
+    throw e;
   }
-}
-function mergeStateSnapshots(latest, local) {
-  const merged = JSON.parse(JSON.stringify(latest || {}));
-  const arrayKeys = ['users', 'referrals', 'beds', 'audit', 'notifications', 'chats', 'shifts'];
-  for (const key of arrayKeys) {
-    const byId = new Map((merged[key] || []).map(item => [String(item.id ?? item.seq ?? ''), item]));
-    for (const item of (local?.[key] || [])) {
-      const id = String(item.id ?? item.seq ?? '');
-      if (!id) continue;
-      const current = byId.get(id);
-      const itemAt = String(item.updated_at || item.created_at || item.ts || '');
-      const currentAt = String(current?.updated_at || current?.created_at || current?.ts || '');
-      if (!current || itemAt > currentAt) byId.set(id, item);
+  CONFIRMED_STATE = JSON.parse(JSON.stringify(serverData));
+  CONFIRMED_CHANGE_SERIAL = serial;
+  updateSyncWarning();
+  LAST_REMOTE_REVISION = Number(serverData.meta.sync_revision || result.revision || 0);
+  LOCAL_CHANGE_AT = DATA.meta.local_updated_at || '';
+  try {
+    if (LOCAL_CHANGE_SERIAL === CONFIRMED_CHANGE_SERIAL) sessionStorage.removeItem(PENDING_SYNC_KEY);
+    else writePendingJournal();
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(DATA));
+  } catch (e) {
+    if (LOCAL_CHANGE_SERIAL !== CONFIRMED_CHANGE_SERIAL) {
+      blockSync();
+      throw new Error('تعذر حفظ سجل التعديلات المعلقة محليًا؛ لا تغلق الصفحة وراجع مسؤول النظام');
     }
-    merged[key] = Array.from(byId.values());
   }
-  merged.attachments = { ...(latest?.attachments || {}), ...(local?.attachments || {}) };
-  merged.meta = { ...(latest?.meta || {}), ...(local?.meta || {}), sync_revision: Number(latest?.meta?.sync_revision || 0) };
+  if (CURRENT_USER) {
+    const me = DATA.users.find(u => u.id === CURRENT_USER.id);
+    if (me) CURRENT_USER = me;
+    refreshCurrentView();
+  }
+  if (SYNC_CHANNEL && LOCAL_CHANGE_SERIAL === CONFIRMED_CHANGE_SERIAL) SYNC_CHANNEL.postMessage({ type: 'state_updated', source: 'server', data: serverData });
+}
+function mergeStateSnapshots(latest, local, base) {
+  const equal = (a, b) => JSON.stringify(a) === JSON.stringify(b);
+  const conflict = key => { throw new Error(`تعارض في ${key}؛ لم تُستبدل النسخة المحلية، راجع مسؤول النظام`); };
+  const threeWay = (remote, current, original, key) => {
+    if (equal(current, original)) return remote;
+    if (equal(remote, original) || equal(current, remote)) return current;
+    return conflict(key);
+  };
+  const mergeFields = (remote, current, original, key, ignored = []) => {
+    const out = {};
+    for (const field of new Set([...Object.keys(remote || {}), ...Object.keys(current || {}), ...Object.keys(original || {})])) {
+      if (ignored.includes(field)) continue;
+      const value = field === 'updated_at' ? [remote?.[field], current?.[field]].filter(Boolean).sort().pop() : threeWay(remote?.[field], current?.[field], original?.[field], key);
+      if (value !== undefined) out[field] = value;
+    }
+    return out;
+  };
+  const mergeList = (key, special) => {
+    const maps = [latest, local, base].map(state => new Map((state?.[key] || []).map(item => [String(item.id ?? item.seq ?? ''), item])));
+    const ids = new Set([...maps[0].keys(), ...maps[1].keys(), ...maps[2].keys()]);
+    const result = [];
+    for (const id of ids) {
+      const [remote, current, original] = maps.map(map => map.get(id));
+      let value;
+      if (special && remote && current && original && !equal(remote, original) && !equal(current, original)) value = special(remote, current, original, `${key}/${id}`);
+      else value = threeWay(remote, current, original, `${key}/${id}`);
+      if (value !== undefined) result.push(value);
+    }
+    return result;
+  };
+  const mergeChat = (remote, current, original, key) => {
+    const out = mergeFields(remote, current, original, key, ['messages', 'reads']);
+    const lists = [remote.messages || [], current.messages || [], original.messages || []];
+    const maps = lists.map(list => new Map(list.map(message => [String(message.id), message])));
+    out.messages = [];
+    for (const id of new Set([...maps[0].keys(), ...maps[1].keys(), ...maps[2].keys()])) {
+      const value = threeWay(maps[0].get(id), maps[1].get(id), maps[2].get(id), `${key}/message`);
+      if (value !== undefined) out.messages.push(value);
+    }
+    out.messages.sort((a, b) => String(a.ts || '').localeCompare(String(b.ts || '')) || String(a.id).localeCompare(String(b.id)));
+    out.reads = {};
+    for (const id of new Set([...Object.keys(remote.reads || {}), ...Object.keys(current.reads || {}), ...Object.keys(original.reads || {})])) {
+      const value = [remote.reads?.[id], current.reads?.[id], original.reads?.[id]].filter(Boolean).sort().pop();
+      if (value) out.reads[id] = value;
+    }
+    return out;
+  };
+  const mergeNotification = (remote, current, original, key) => {
+    const out = mergeFields(remote, current, original, key, ['read_by', 'dismissed_by', 'read']);
+    out.read_by = [...new Set([...(remote.read_by || []), ...(current.read_by || [])])];
+    out.dismissed_by = [...new Set([...(remote.dismissed_by || []), ...(current.dismissed_by || [])])];
+    out.read = !!remote.read || !!current.read;
+    return out;
+  };
+  const merged = JSON.parse(JSON.stringify(latest));
+  for (const key of ['users', 'referrals', 'beds', 'audit', 'notifications', 'chats', 'shifts']) {
+    merged[key] = mergeList(key, key === 'chats' ? mergeChat : key === 'users' ? mergeFields : key === 'notifications' ? mergeNotification : null);
+  }
+  // Two devices can independently add distinct IDs with the same business key.
+  // Block that combined result rather than silently creating ambiguous records.
+  const checkCombinedDuplicates = (key, businessKey) => {
+    const counts = items => {
+      const m = new Map(); for (const item of items || []) { const v = businessKey(item); if (v) m.set(v, (m.get(v) || 0) + 1); } return m;
+    };
+    const r = counts(latest[key]), l = counts(local[key]);
+    for (const [id, count] of counts(merged[key])) if (count > 1 && count > Math.max(r.get(id) || 0, l.get(id) || 0)) conflict(key + '/duplicate');
+  };
+  checkCombinedDuplicates('users', u => String(u.username || '').trim().toLowerCase());
+  checkCombinedDuplicates('referrals', r => STATES[r.status]?.terminal ? '' : String(r.ref_no || '').trim().toLowerCase());
+  checkCombinedDuplicates('shifts', s => s.user_id && s.date && s.shift ? JSON.stringify([String(s.user_id), s.date, s.shift]) : '');
+  const existingShifts = new Set((base?.shifts || []).map(s => String(s.id)));
+  for (const shift of merged.shifts) if (!existingShifts.has(String(shift.id))) {
+    const user = merged.users.find(u => u.id === shift.user_id);
+    if (!user || !user.active || user.pending_approval || user.rejected || user.role !== shift.role) conflict('المناوبات/المستخدم');
+  }
+  const baseAuditIds = new Set((base?.audit || []).map(a => String(a.id)));
+  const remoteAddedAudit = (latest.audit || []).some(a => !baseAuditIds.has(String(a.id)));
+  const localAddedAudit = (local.audit || []).some(a => !baseAuditIds.has(String(a.id)));
+  if (remoteAddedAudit && localAddedAudit && !equal(latest.audit, local.audit)) conflict('سلسلة التدقيق');
+  const attachmentKeys = new Set([...Object.keys(latest.attachments || {}), ...Object.keys(local.attachments || {}), ...Object.keys(base?.attachments || {})]);
+  merged.attachments = {};
+  for (const id of attachmentKeys) {
+    const value = threeWay(latest.attachments?.[id], local.attachments?.[id], base?.attachments?.[id], 'المرفقات');
+    if (value !== undefined) merged.attachments[id] = value;
+  }
+  merged.meta = { ...(latest.meta || {}), ...(local.meta || {}), sync_revision: Number(latest.meta?.sync_revision || 0) };
+  for (const field of ['seq', 'auditSeq', 'notifSeq']) merged.meta[field] = Math.max(Number(latest.meta?.[field] || 0), Number(local.meta?.[field] || 0));
+  for (const key of ['audit', 'notifications']) merged[key].sort((a,b) => String(b.ts || '').localeCompare(String(a.ts || '')));
   return merged;
 }
 function syncToBackend() {
@@ -887,24 +998,59 @@ function syncToBackend() {
     _syncQueued = true;
     _saveInFlight = _saveInFlight
       .then(async () => { while (_syncQueued) { _syncQueued = false; await pushStateSnapshot(); } })
-      .catch(e => { console.error('[WASL] sync:', e); toast('تعذر مزامنة التعديل مع الخادم. أعد المحاولة عند عودة الاتصال.', 'err'); });
+      .catch(e => {
+        console.error('[WASL] sync:', e);
+        toast(_syncBlocked ? e.message : 'تعذر حفظ التعديلات على الخادم؛ ستُعاد المحاولة عند عودة الاتصال.', 'err');
+        if (!_syncBlocked && !_syncRetryTimer) _syncRetryTimer = setTimeout(() => { _syncRetryTimer = null; if (LOCAL_CHANGE_SERIAL !== CONFIRMED_CHANGE_SERIAL) syncToBackend(); }, 8000);
+      });
   }, 400);
 }
 
+function writePendingJournal() {
+  if (!CONFIRMED_STATE?.meta || !DATA?.meta) throw new Error('لا توجد نسخة أساس مؤكدة للتعديلات');
+  sessionStorage.setItem(PENDING_SYNC_KEY, JSON.stringify({ base: CONFIRMED_STATE, data: DATA }));
+}
+function restorePendingJournal() {
+  const raw = sessionStorage.getItem(PENDING_SYNC_KEY);
+  if (!raw) return;
+  let pending;
+  try { pending = JSON.parse(raw); } catch (e) { throw new Error('سجل التعديلات المحلية غير قابل للقراءة؛ لم تُحذف البيانات، راجع مسؤول النظام'); }
+  if (!pending?.base?.meta || pending.base.meta.version !== 'v6' || !pending?.data?.meta || pending.data.meta.version !== 'v6')
+    throw new Error('سجل التعديلات المحلية غير صالح؛ لم تُحذف البيانات، راجع مسؤول النظام');
+  const latest = DATA;
+  if (!latest) throw new Error('لا توجد نسخة خادم لمراجعة التعديلات المحلية؛ لم تُحذف البيانات');
+  try {
+    DATA = mergeStateSnapshots(latest, pending.data, pending.base);
+    CONFIRMED_STATE = JSON.parse(JSON.stringify(latest));
+    LOCAL_CHANGE_SERIAL = 1;
+    CONFIRMED_CHANGE_SERIAL = 0;
+    writePendingJournal();
+  } catch (e) {
+    DATA = pending.data;
+    CONFIRMED_STATE = pending.base;
+    LOCAL_CHANGE_SERIAL = 1;
+    CONFIRMED_CHANGE_SERIAL = 0;
+    blockSync();
+    RECOVERED_SYNC_ERROR = 'توجد تعديلات محلية وتعارض مع الخادم؛ حُفظت النسخة للمراجعة ولم تُرسل. لا تغلق التبويب وتواصل مع مسؤول النظام.';
+  }
+}
 function saveData() {
   try {
     if (!DATA?.meta) return false;
+    LOCAL_CHANGE_SERIAL++;
+    updateSyncWarning();
     DATA.meta.local_updated_at = nowIso();
     LOCAL_CHANGE_AT = DATA.meta.local_updated_at;
+    writePendingJournal();
     localStorage.setItem(STORAGE_KEY, JSON.stringify(DATA));
-    if (SYNC_CHANNEL) SYNC_CHANNEL.postMessage({ type: 'state_updated', source: 'local', ts: LOCAL_CHANGE_AT, revision: DATA.meta.sync_revision || 0, data: DATA });
     syncToBackend();
     return true;
   }
-  catch (e) { toast('فشل الحفظ: ' + e.message, 'err'); return false; }
+  catch (e) { blockSync(); toast('فشل حفظ التعديلات المحلية؛ لا تغلق الصفحة: ' + e.message, 'err'); return false; }
 }
 
 function acceptLocalSync(candidate, source = 'local') {
+  if (_syncBlocked || LOCAL_CHANGE_SERIAL !== CONFIRMED_CHANGE_SERIAL) return false;
   if (!candidate || typeof candidate !== 'object' || !candidate.meta || candidate.meta.version !== 'v6') return false;
   const incomingRevision = Number(candidate.meta.sync_revision || 0);
   const currentRevision = Number(DATA?.meta?.sync_revision || 0);
@@ -913,15 +1059,16 @@ function acceptLocalSync(candidate, source = 'local') {
   if (incomingRevision < currentRevision) return false;
   if (incomingRevision === currentRevision && incomingAt && currentAt && incomingAt <= currentAt) return false;
   DATA = candidate;
+  CONFIRMED_STATE = JSON.parse(JSON.stringify(candidate));
+  LAST_REMOTE_REVISION = incomingRevision;
   LOCAL_CHANGE_AT = incomingAt;
   try { localStorage.setItem(STORAGE_KEY, JSON.stringify(DATA)); } catch (e) {}
   if (CURRENT_USER) {
     const me = DATA.users.find(u => u.id === CURRENT_USER.id);
     if (me) CURRENT_USER = me;
-    buildNav();
-    try { showPage(PAGE); } catch (e) { console.warn('[WASL] view refresh:', e); }
+    try { refreshCurrentView(); } catch (e) { console.warn('[WASL] view refresh:', e); }
   }
-  if (source !== 'server') toast(LANG === 'ar' ? 'تم تحديث البيانات من تبويب آخر' : 'Data updated from another tab', 'ok');
+  if (source !== 'server') console.info('[WASL] تم تحديث البيانات من تبويب آخر');
   return true;
 }
 
@@ -934,28 +1081,19 @@ if (SYNC_CHANNEL) {
 }
 window.addEventListener('storage', event => {
   if (event.key !== STORAGE_KEY || !event.newValue) return;
-  try { acceptLocalSync(JSON.parse(event.newValue), 'storage'); } catch (e) {}
+  // Local storage may contain an unconfirmed edit from another tab; read the server instead.
+  refreshFromRealtime();
 });
 
 async function syncNow() {
   try {
-    const remote = await loadData();
-    if (!remote) throw new Error('لا توجد نسخة خادم صالحة');
-    const remoteRevision = Number(remote.meta?.sync_revision || 0);
-    const localRevision = Number(DATA?.meta?.sync_revision || 0);
-    const remoteAt = String(remote.meta?.local_updated_at || '');
-    const localAt = String(DATA?.meta?.local_updated_at || LOCAL_CHANGE_AT || '');
-    if (remoteRevision > localRevision || (remoteRevision === localRevision && remoteAt >= localAt) || !DATA?.meta?.local_updated_at) {
-      DATA = remote;
-      try { localStorage.setItem(STORAGE_KEY, JSON.stringify(DATA)); } catch (e) {}
-      _syncBlocked = false;
-      if (CURRENT_USER) showPage(PAGE);
-      toast('✓ تمت المزامنة مع الخادم', 'ok');
-    } else {
-      _syncBlocked = false;
+    if (_syncBlocked) return toast('يوجد تعارض يحتاج مراجعة؛ لم تُستبدل التعديلات المحلية. تواصل مع مسؤول النظام.', 'err');
+    if (LOCAL_CHANGE_SERIAL !== CONFIRMED_CHANGE_SERIAL) {
       syncToBackend();
-      toast('توجد تعديلات محلية أحدث؛ جاري رفعها', 'warn');
+      return toast('توجد تعديلات غير مؤكدة؛ تجري محاولة حفظها', 'warn');
     }
+    await refreshFromRealtime();
+    toast('✓ تم فحص التحديثات من الخادم', 'ok');
   } catch (e) {
     toast('تعذرت المزامنة: ' + e.message, 'err');
   }
@@ -1062,34 +1200,44 @@ function audit(action, entity_type, entity_id, details) {
     const prev = DATA.audit.length ? DATA.audit[0].hash : '0';
     const payload = JSON.stringify({ ts: nowIso(), user: CURRENT_USER?.username || 'anon', action, entity_id, prev });
     const hash = SHA256(payload);
-    DATA.audit.unshift({ seq: ++DATA.meta.auditSeq, ts: nowIso(), user: CURRENT_USER?.full_name || 'مجهول', role: CURRENT_USER?.role || '—', action, entity_type, entity_id, details: String(details || '').slice(0, 300), prevHash: prev, hash });
+    DATA.audit.unshift({ id: 'A_' + uid(), seq: ++DATA.meta.auditSeq, ts: nowIso(), user: CURRENT_USER?.full_name || 'مجهول', role: CURRENT_USER?.role || '—', action, entity_type, entity_id, details: String(details || '').slice(0, 300), prevHash: prev, hash });
     if (DATA.audit.length > 500) DATA.audit.length = 500;
     saveData();
   } catch (e) { console.warn('audit:', e); }
 }
 
 function notifyRole(role, referralId, message, fromUser) {
-  DATA.notifications.unshift({ id: ++DATA.meta.notifSeq, ts: nowIso(), role, referral_id: referralId, message, from_user: fromUser, read: false });
+  DATA.meta.notifSeq++;
+  DATA.notifications.unshift({ id: 'N_' + uid(), ts: nowIso(), role, referral_id: referralId, message, from_user: fromUser, read: false });
   if (DATA.notifications.length > 200) DATA.notifications.length = 200;
 }
 function notifyUser(userId, referralId, message) {
   if (!userId) return;
   const user = DATA.users.find(u => u.id === userId);
   if (!user) return;
+  DATA.meta.notifSeq++;
   DATA.notifications.unshift({
-    id: ++DATA.meta.notifSeq, ts: nowIso(),
+    id: 'N_' + uid(), ts: nowIso(),
     user_id: userId, role: user.role, referral_id: referralId, message,
     from_user: CURRENT_USER ? CURRENT_USER.full_name : 'النظام', read: false
   });
   if (DATA.notifications.length > 200) DATA.notifications.length = 200;
 }
+function notificationBelongsToUser(n) {
+  if (!CURRENT_USER || (n.dismissed_by || []).includes(CURRENT_USER.id)) return false;
+  return n.user_id ? n.user_id === CURRENT_USER.id : (n.role === CURRENT_USER.role || n.role === 'all');
+}
+function notificationIsRead(n) {
+  return n.user_id ? !!n.read : !!n.read || (n.read_by || []).includes(CURRENT_USER.id);
+}
+function markNotificationForCurrentUser(n) {
+  if (!notificationBelongsToUser(n)) return;
+  if (n.user_id) n.read = true;
+  else n.read_by = Array.from(new Set([...(n.read_by || []), CURRENT_USER.id]));
+  n.updated_at = nowIso();
+}
 function getUnreadNotifsForUser() {
-  return DATA.notifications.filter(n => {
-    if (n.read) return false;
-    if (n.user_id && n.user_id === CURRENT_USER.id) return true;
-    if (!n.user_id && (n.role === CURRENT_USER.role || n.role === 'all')) return true;
-    return false;
-  });
+  return DATA.notifications.filter(n => notificationBelongsToUser(n) && !notificationIsRead(n));
 }
 
 // ═══════════════════════════════════════════════════════════════════
@@ -1105,23 +1253,27 @@ function transitionReferral(id, to, payload = {}) {
   const perm = ACTION_PERMS[permKey];
   if (!perm) return { ok: false, error: 'الانتقال غير معرّف' };
   if (!perm.roles.includes(CURRENT_USER.role)) return { ok: false, error: `هذا الإجراء متاح فقط لـ: ${perm.roles.map(roleLabel).join('، ')}` };
-  if (from === 'awaiting_final' && CURRENT_USER.role === 'doctor' && CURRENT_USER.department !== r.target_specialty) {
-    return { ok: false, error: `القرار النهائي خاص بقسم ${r.target_specialty}` };
+  if (isConsultation(r) && to === 'doctor_accepted') return { ok: false, error: 'استخدم نموذج تقرير الاستشارة الطبية' };
+  if (!isConsultation(r) && to === 'consultation_done') return { ok: false, error: 'هذا الإجراء خاص بالاستشارة الطبية' };
+  if (CURRENT_USER.role === 'doctor' && ['awaiting_doctor', 'resubmitted', 'awaiting_final'].includes(from) && targetSpecialtyOf(r) && CURRENT_USER.department !== targetSpecialtyOf(r)) {
+    return { ok: false, error: `القرار خاص بقسم ${targetSpecialtyOf(r)}` };
   }
 
   if (to === 'doctor_accepted') {
     if (!payload.notes || !payload.notes.trim()) return { ok: false, error: 'رد على الإحالة إلزامي' };
+    if (r.priority === 'طارئ' && payload.emergency_accept !== 'نعم') return { ok: false, error: 'يلزم تأكيد قبول الطوارئ' };
+    if (r.priority === 'تنويم عادي' && String(payload.ward_type || '').trim() === 'طوارئ') return { ok: false, error: 'سرير الطوارئ غير متاح في مسار التنويم العادي' };
     r.doctor_decision = 'accepted';
     r.doctor_notes = payload.notes.trim();
     r.doctor_responded_at = nowIso();
-    r.assigned_doctor_id = r.assigned_doctor_id || CURRENT_USER.id;
+    r.assigned_doctor_id = CURRENT_USER.id; r.assigned_doctor_name = CURRENT_USER.full_name;
     const meta = REFERRAL_TYPE_META[r.priority];
     r.admission_type = meta ? meta.admission : 'قبول تنويم';
     r.emergency_admission = r.priority === 'طارئ' && payload.emergency_accept === 'نعم';
     r.ward_type = r.emergency_admission ? 'طوارئ' : ((payload.ward_type && payload.ward_type.trim()) || '');
     r.doctor_mobile = CURRENT_USER.mobile || DEFAULT_MOBILES[CURRENT_USER.username] || r.doctor_mobile || '';
     if (r.emergency_admission) r.admission_type = 'قبول للتنويم';
-    notifyRole('coordinator', r.id, 'الطبيب قَبِل الإحالة — بانتظار توجيهك', CURRENT_USER.full_name);
+    notifyRole('coordinator', r.id, r.emergency_admission ? '🚨 قبول طوارئ مباشر — جاهز لطباعة المنسق' : 'الطبيب قَبِل الإحالة — بانتظار توجيهك', CURRENT_USER.full_name);
   }
   if (to === 'doctor_rejected') {
     if (!payload.reason || !payload.reason.trim()) return { ok: false, error: 'سبب الرفض إلزامي' };
@@ -1129,7 +1281,7 @@ function transitionReferral(id, to, payload = {}) {
     r.rejection_reason = payload.reason;
     r.doctor_notes = payload.notes || '';
     r.doctor_responded_at = nowIso();
-    r.assigned_doctor_id = r.assigned_doctor_id || CURRENT_USER.id;
+    r.assigned_doctor_id = CURRENT_USER.id; r.assigned_doctor_name = CURRENT_USER.full_name;
     r.doctor_mobile = CURRENT_USER.mobile || DEFAULT_MOBILES[CURRENT_USER.username] || r.doctor_mobile || '';
     notifyRole('coordinator', r.id, `الطبيب رفض الإحالة — السبب: ${payload.reason}`, CURRENT_USER.full_name);
   }
@@ -1139,7 +1291,7 @@ function transitionReferral(id, to, payload = {}) {
     r.doctor_notes = payload.notes || '';
     r.needed_info = payload.needed_info;
     r.doctor_responded_at = nowIso();
-    r.assigned_doctor_id = r.assigned_doctor_id || CURRENT_USER.id;
+    r.assigned_doctor_id = CURRENT_USER.id; r.assigned_doctor_name = CURRENT_USER.full_name;
     notifyRole('coordinator', r.id, `الطبيب يطلب استكمال: ${payload.needed_info}`, CURRENT_USER.full_name);
   }
   if (to === 'consultation_done') {
@@ -1153,7 +1305,7 @@ function transitionReferral(id, to, payload = {}) {
     r.doctor_mobile = CURRENT_USER.mobile || DEFAULT_MOBILES[CURRENT_USER.username] || r.doctor_mobile || '';
     r.doctor_decision = 'consultation';
     r.doctor_responded_at = nowIso();
-    r.assigned_doctor_id = r.assigned_doctor_id || CURRENT_USER.id;
+    r.assigned_doctor_id = CURRENT_USER.id; r.assigned_doctor_name = CURRENT_USER.full_name;
     notifyRole('coordinator', r.id, '📋 الطبيب أرسل الاستشارة الطبية — جاهزة للطباعة', CURRENT_USER.full_name);
   }
   if (to === 'resubmitted') {
@@ -1216,10 +1368,8 @@ function transitionReferral(id, to, payload = {}) {
     r.completed_by = CURRENT_USER.id;
     r.completed_by_name = CURRENT_USER.full_name;
     r.closure_notes = payload.notes || '';
-    if (r.bed_id) {
-      const bed = DATA.beds.find(b => b.id === r.bed_id);
-      if (bed) Object.assign(bed, { available: true, current_patient: null, current_referral: null, updated_at: nowIso() });
-    }
+    // Closing the referral does not establish that the patient has left the bed.
+    // Bed availability must be updated explicitly by the bed-management team.
     if (isConsultation(r)) notifyRole('doctor', r.id, '✓ تم إغلاق الاستشارة', CURRENT_USER.full_name);
     else { notifyRole('coordinator', r.id, 'الإحالة مغلقة نهائياً', CURRENT_USER.full_name); if (r.assigned_doctor_id) notifyRole('doctor', r.id, 'الإحالة مغلقة', CURRENT_USER.full_name); }
   }
@@ -1308,11 +1458,12 @@ function getOrCreateDirectChat(userId) {
 }
 
 async function sendChatMessage(chatId, text, files) {
-  const chat = DATA.chats.find(c => c.id === chatId);
+  if (_syncBlocked) return { ok: false, error: 'المزامنة متوقفة؛ احتُفظ بالمسودة. راجع مسؤول النظام قبل الإرسال' };
+  let chat = DATA.chats.find(c => c.id === chatId);
   if (!chat) return { ok: false, error: 'المحادثة غير موجودة' };
   if (!isMemberOfChat(chat, CURRENT_USER.id)) return { ok: false, error: 'غير مصرح لك بالإرسال في هذه المحادثة' };
   text = (text || '').trim();
-  const MAX_SIZE = 15 * 1024 * 1024;
+  const MAX_SIZE = ATTACHMENT_MAX_BYTES;
   const validFiles = (files || []).filter(f => {
     const isImage = (f.type || '').startsWith('image/');
     const isPdf = f.type === 'application/pdf';
@@ -1320,25 +1471,30 @@ async function sendChatMessage(chatId, text, files) {
   });
   if (!text && !validFiles.length) return { ok: false };
   const msg = { id: 'M_' + uid(), from: CURRENT_USER.id, from_name: CURRENT_USER.full_name, text, atts: [], ts: nowIso() };
+  const stagedAttachments = {};
   for (const file of validFiles) {
     try {
       const attId = 'ATT-' + uid();
       await attsPut(attId, file);
-      DATA.attachments[attId] = { id: attId, referral_id: 'chat-' + chatId, name: file.name, type: file.type || 'application/octet-stream', size: file.size, uploaded_at: nowIso() };
+      stagedAttachments[attId] = { id: attId, referral_id: 'chat-' + chatId, name: file.name, type: file.type || 'application/octet-stream', size: file.size, uploaded_at: nowIso() };
       msg.atts.push(attId);
-    } catch(e) { toast('فشل رفع: ' + file.name, 'err'); }
+    } catch(e) { return { ok: false, error: `فشل رفع ${file.name}: ${e.message}` }; }
   }
+  // The state may have changed while the attachment upload was in progress.
+  chat = DATA.chats.find(c => c.id === chatId);
+  if (!chat || !CURRENT_USER || !isMemberOfChat(chat, CURRENT_USER.id)) return { ok: false, error: 'لم تعد المحادثة متاحة؛ احتُفظ بالمسودة' };
+  Object.assign(DATA.attachments, stagedAttachments);
   chat.messages.push(msg);
   if (!chat.reads) chat.reads = {};
   chat.reads[CURRENT_USER.id] = nowIso();
-  saveData();
+  if (!saveData()) return { ok: false, error: 'تعذر تسجيل الرسالة محليًا؛ احتُفظ بالمسودة ولا تُعد الإرسال قبل مراجعة مسؤول النظام' };
   return { ok: true };
 }
 
 function getShiftsForDate(d) { return (DATA.shifts || []).filter(s => s.date === d); }
 function getTodayShifts() { return getShiftsForDate(getTodayStr()); }
 function addShift(data) {
-  const s = { id: 'S_' + uid(), date: data.date, shift: data.shift, role: data.role, user_id: data.user_id, user_name: data.user_name, notes: data.notes || '', created_by: CURRENT_USER.id, created_at: nowIso() };
+  const s = { id: 'S_' + uid(), date: data.date, shift: data.shift, role: data.role, user_id: data.user_id, user_name: data.user_name, notes: data.notes || '', attachment_id: data.attachment_id || null, attachment_name: data.attachment_name || null, created_by: CURRENT_USER.id, created_at: nowIso() };
   DATA.shifts.push(s);
   saveData();
   audit('shift_added', 'shift', s.id, `${s.date} ${s.shift} ${s.user_name}`);
@@ -1356,7 +1512,7 @@ function touchPresence() {
   if (!CURRENT_USER || !DATA) return;
   const u = DATA.users.find(x => x.id === CURRENT_USER.id);
   if (!u) return;
-  u.last_seen_at = nowIso(); CURRENT_USER = u; saveData();
+  u.last_seen_at = nowIso(); u.updated_at = u.last_seen_at; CURRENT_USER = u; saveData();
 }
 function startPresence() {
   touchPresence();
@@ -1569,7 +1725,6 @@ function doLogin() {
     CURRENT_USER = user;
     user.last_seen_at = nowIso();
     if (user.role === 'doctor') notifyRole('all', null, `الطبيب ${user.full_name} متصل الآن`, user.full_name);
-    startPresence();
     const session = JSON.stringify({ userId: user.id, exp: Date.now() + 8 * 3600e3 });
     localStorage.setItem(SESSION_KEY, session);
     sessionStorage.setItem(SESSION_KEY, session);
@@ -1727,6 +1882,7 @@ function doSetNewPassAfterMobile(e, userId) {
 function enterApp() {
   $('loginScreen').classList.add('hidden');
   $('app').classList.remove('hidden');
+  startPresence();
   $('userName').textContent = CURRENT_USER.full_name;
   $('userRole').textContent = roleLabel(CURRENT_USER.role) + (CURRENT_USER.department ? ' — ' + CURRENT_USER.department : '');
   $('userAvatar').textContent = CURRENT_USER.full_name[0];
@@ -1794,6 +1950,7 @@ function changePassword(e, force) {
   }
 }
 function resetUserPassword(id) {
+  if (CURRENT_USER?.role !== 'admin') return toast('غير مصرح', 'err');
   const u = DATA.users.find(x => x.id === id);
   if (!u) return;
   const temp = prompt(`كلمة مؤقتة لـ "${u.username}":`, 'Temp@' + Math.floor(1000 + Math.random() * 9000));
@@ -1939,6 +2096,16 @@ function renderPage(p) {
   return renderList(p);
 }
 
+function refreshCurrentView() {
+  if (!CURRENT_USER) return;
+  buildNav();
+  if (PAGE === 'chat') return refreshLiveChat();
+  if (PAGE === 'shifts') return renderShiftsPage();
+  // Do not destroy an in-progress form or search field during background sync.
+  if (PAGE === 'create' || $('modalRoot')?.querySelector('form') || document.activeElement?.matches('input,textarea,select')) return;
+  if ($('content')) renderPage(PAGE);
+}
+
 // ═══════════════════════════════════════════════════════════════════
 // لوحة التحكم
 // ═══════════════════════════════════════════════════════════════════
@@ -1988,7 +2155,6 @@ function renderDashboard() {
 
 function renderList(p) {
   let list = DATA.referrals.slice();
-  if (p === 'outgoing') list = list.filter(r => !STATES[r.status]?.terminal);
   if (p === 'forward_consultant') list = list.filter(r => r.status === 'doctor_accepted');
   if (p === 'consultation_ready') list = list.filter(r => r.status === 'consultation_done');
   if (p === 'need_supplement') list = list.filter(r => r.status === 'info_requested');
@@ -2007,12 +2173,13 @@ function renderList(p) {
   const totalPages = Math.max(1, Math.ceil(list.length / LIST_PAGE_SIZE));
   LIST_PAGE = Math.min(Math.max(1, LIST_PAGE), totalPages);
   const visible = list.slice((LIST_PAGE - 1) * LIST_PAGE_SIZE, LIST_PAGE * LIST_PAGE_SIZE);
-  const pageButtons = Array.from({length: Math.min(totalPages, 4)}, (_, i) => i + 1).map(n => `<button class=\"ghost sm\" onclick=\"setListPage(${n})\">${n}</button>`).join('');
+  const pageNumbers = Array.from(new Set([1, totalPages, ...Array.from({ length: 5 }, (_, i) => LIST_PAGE + i - 2).filter(n => n >= 1 && n <= totalPages)])).sort((a, b) => a - b);
+  const pageButtons = pageNumbers.map((n, i) => `${i && n - pageNumbers[i - 1] > 1 ? '<span>…</span>' : ''}<button class="${n === LIST_PAGE ? 'primary' : 'ghost'} sm" onclick="setListPage(${n})" ${n === LIST_PAGE ? 'aria-current="page"' : ''}>${n}</button>`).join('');
   $('content').innerHTML = `<div class="panel">
     <h3>القائمة (${list.length})</h3>
     <div class="grid2" style="margin-bottom:14px"><input class="searchbox" value="${esc(LIST_QUERY)}" placeholder="بحث..." oninput="setListQuery(this.value, '${p}')"><select onchange="setListFilter('status',this.value,'${p}')"><option value="">كل الحالات</option>${Object.entries(STATES).map(([key,val]) => `<option value="${esc(key)}" ${LIST_STATUS === key ? 'selected' : ''}>${esc(val.label)}</option>`).join('')}</select><select onchange="setListFilter('type',this.value,'${p}')"><option value="">كل الأنواع</option>${REFERRAL_TYPES.map(type => `<option value="${esc(type)}" ${LIST_TYPE === type ? 'selected' : ''}>${esc(type)}</option>`).join('')}</select><select onchange="setListFilter('dept',this.value,'${p}')"><option value="">كل التخصصات</option>${DEPARTMENTS.map(dept => `<option value="${esc(dept)}" ${LIST_DEPT === dept ? 'selected' : ''}>${esc(dept)}</option>`).join('')}</select></div>
     <div id="listWrap">${tableHTML(visible)}</div>
-    ${totalPages > 1 ? `<div style="display:flex;gap:6px;align-items:center;justify-content:center;margin-top:16px;flex-wrap:wrap">${pageButtons}${totalPages > 4 ? '<span>…</span>' : ''}<button class="secondary sm" onclick="setListPage(${Math.min(totalPages, LIST_PAGE + 1)})" ${LIST_PAGE >= totalPages ? 'disabled' : ''}>التالي</button><span style="font-size:12px;color:var(--muted)">صفحة ${LIST_PAGE} من ${totalPages}</span></div>` : ''}
+    ${totalPages > 1 ? `<nav aria-label="صفحات الإحالات" style="display:flex;gap:6px;align-items:center;justify-content:center;margin-top:16px;flex-wrap:wrap"><button class="secondary sm" onclick="setListPage(${Math.max(1, LIST_PAGE - 1)})" ${LIST_PAGE <= 1 ? 'disabled' : ''}>السابق</button>${pageButtons}<button class="secondary sm" onclick="setListPage(${Math.min(totalPages, LIST_PAGE + 1)})" ${LIST_PAGE >= totalPages ? 'disabled' : ''}>التالي</button><span style="font-size:12px;color:var(--muted)">صفحة ${LIST_PAGE} من ${totalPages}</span></nav>` : ''}
   </div>`;
 }
 
@@ -2031,9 +2198,11 @@ function referralActionButtons(r) {
   return `<div style="display:flex;gap:4px;flex-wrap:wrap;justify-content:flex-start"><button class="ghost xs" onclick="openEditReferral('${esc(r.id)}')">✏ تعديل</button>${!terminal ? `<button class="secondary xs" onclick="openTransferReferral('${esc(r.id)}')">↔ تحويل</button>` : ''}${CURRENT_USER.role === 'admin' ? `<button class="danger xs" onclick="deleteReferral('${esc(r.id)}')">🗑 حذف</button>` : ''}</div>`;
 }
 
+let EDIT_REFERRAL_BASE = null;
 function openEditReferral(id) {
   if (!['admin', 'coordinator'].includes(CURRENT_USER?.role)) return toast('غير مصرح', 'err');
   const r = DATA.referrals.find(x => x.id === id); if (!r) return toast('الإحالة غير موجودة', 'err');
+  EDIT_REFERRAL_BASE = { id, value: JSON.stringify(r) };
   $('modalRoot').innerHTML = `<div class="modal-back" onclick="if(event.target===this)closeModal()"><div class="modal" style="max-width:680px"><div class="mh"><h3>✏ تعديل الإحالة ${esc(refNoOf(r))}</h3><button class="ghost sm" onclick="closeModal()">✕</button></div><form class="grid2" onsubmit="saveReferralEdit(event,'${esc(id)}')"><div class="field"><label>اسم المريض *</label><input name="patient_name" value="${esc(r.patient_name)}" required></div><div class="field"><label>رقم الملف *</label><input name="mrn" value="${esc(r.mrn)}" required dir="ltr"></div><div class="field"><label>القسم النهائي *</label><input name="target_specialty" list="edit-department-options" value="${esc(targetSpecialtyOf(r))}" required><datalist id="edit-department-options">${DEPARTMENTS.map(d => `<option value="${esc(d)}">`).join('')}</datalist></div><div class="field"><label>نوع الإحالة *</label><select name="priority" required>${REFERRAL_TYPES.map(d => `<option value="${esc(d)}" ${r.priority === d ? 'selected' : ''}>${esc(d)}</option>`).join('')}</select></div><div class="field full"><label>التشخيص *</label><textarea name="diagnosis" required>${esc(r.diagnosis)}</textarea></div><div class="field full"><label>ملاحظات</label><textarea name="notes">${esc(r.notes || '')}</textarea></div><div class="full"><button class="primary" type="submit" style="width:100%">حفظ التعديل</button></div></form></div></div>`;
 }
 
@@ -2041,6 +2210,7 @@ function saveReferralEdit(event, id) {
   event.preventDefault();
   if (!['admin', 'coordinator'].includes(CURRENT_USER?.role)) return toast('غير مصرح', 'err');
   const r = DATA.referrals.find(x => x.id === id); if (!r) return toast('الإحالة غير موجودة', 'err');
+  if (!EDIT_REFERRAL_BASE || EDIT_REFERRAL_BASE.id !== id || EDIT_REFERRAL_BASE.value !== JSON.stringify(r)) return toast('تغيرت الإحالة أثناء التحرير؛ احتُفظ بالمسودة. راجع أحدث نسخة قبل الحفظ.', 'err');
   const d = Object.fromEntries(new FormData(event.target));
   Object.assign(r, { patient_name: d.patient_name.trim(), mrn: d.mrn.trim(), target_specialty: d.target_specialty, specialty: d.target_specialty, priority: d.priority, diagnosis: d.diagnosis.trim(), notes: d.notes.trim(), updated_at: nowIso() });
   if (!Array.isArray(r.timeline)) r.timeline = [];
@@ -2080,7 +2250,7 @@ function tableHTML(list) {
     const st = STATES[r.status] || { label: r.status, cls: '' };
     const actor = st.actor && st.actor !== '—' ? `<span class="actor-badge">${roleLabel(st.actor)}</span>` : '';
     const isNew = CURRENT_USER.role === 'doctor' && !r.doctor_viewed_at && ['awaiting_doctor','resubmitted','consulting','awaiting_final'].includes(r.status);
-    return `<tr onclick="openDetail('${esc(r.id)}')" title="فتح تفاصيل الإحالة" style="cursor:pointer;${isNew ? 'background:#e8f4f8;border-right:3px solid var(--teal);' : ''}>
+    return `<tr onclick="openDetail('${esc(r.id)}')" title="فتح تفاصيل الإحالة" style="cursor:pointer;${isNew ? 'background:#e8f4f8;border-right:3px solid var(--teal);' : ''}">
       <td><b style="color:var(--navy)">${esc(refNoOf(r))}</b>${isNew ? ' <span class="pill p-new">🆕</span>' : ''}<div style="font-size:11px;color:var(--muted);margin-top:3px">${esc(r.patient_name)}</div><div style="font-size:10.5px;color:var(--muted)">MRN: ${esc(r.mrn)}</div></td>
       <td>${typeChip(r)}</td>
       <td>${r.target_specialty ? '🎯 ' + esc(r.target_specialty) : esc(r.specialty || '—')}</td>
@@ -2182,8 +2352,9 @@ async function submitReferral(e) {
     if (DATA.referrals.some(r => (r.ref_no || '').trim() === refNo && !STATES[r.status]?.terminal)) {
       toast(`رقم "${refNo}" مستخدم`, 'err'); return;
     }
-    try { await openAttsDB(); } catch (dbErr) { toast('⚠ المرفقات غير متاحة', 'warn'); }
-    const id = 'WS-' + new Date().getFullYear() + '-' + String(++DATA.meta.seq).padStart(4, '0');
+    try { await openAttsDB(); } catch (dbErr) { console.warn('[WASL] تعذر التخزين المحلي للمرفقات:', dbErr.message); }
+    const id = 'WS-' + new Date().getFullYear() + '-' + uid();
+    const stagedAttachments = {};
     const r = {
       id, ...d, ref_no: refNo,
       age: d.age ? parseInt(d.age) : null,
@@ -2197,27 +2368,28 @@ async function submitReferral(e) {
       departments: [targetSpecialty], opinions: []
     };
     const files = f.querySelector('[name=files]').files;
-    if (files.length && ATTS_DB_OK) {
+    if (files.length) {
       submitBtn.disabled = true;
       for (let i = 0; i < files.length; i++) {
         const file = files[i];
-        const isImage = (file.type || '').startsWith('image/');
-        const isPdf = file.type === 'application/pdf';
-        if (!isImage && !isPdf) { toast(`تخطي "${file.name}" — نوع غير مسموح`, 'warn'); continue; }
-        if (file.size > 15 * 1024 * 1024) { toast(`تخطي "${file.name}" — أكبر من 15م.ب`, 'warn'); continue; }
+        const supported = ['image/jpeg', 'image/png', 'image/webp', 'application/pdf'].includes(file.type);
+        if (!supported) throw new Error(`نوع الملف "${file.name}" غير مدعوم؛ استخدم PDF أو JPEG أو PNG أو WebP`);
+        if (file.size > ATTACHMENT_MAX_BYTES) throw new Error(`الملف "${file.name}" أكبر من 4 م.ب`);
         submitBtn.textContent = `⏳ رفع ${i+1}/${files.length}...`;
         try {
           const attId = 'ATT-' + uid();
           await attsPut(attId, file);
-          DATA.attachments[attId] = { id: attId, referral_id: id, name: file.name, type: file.type, size: file.size, uploaded_at: nowIso() };
+          stagedAttachments[attId] = { id: attId, referral_id: id, name: file.name, type: file.type, size: file.size, uploaded_at: nowIso() };
           r.attachment_ids.push(attId);
-        } catch (err) { toast(`فشل رفع "${file.name}"`, 'err'); }
+        } catch (err) { throw new Error(`فشل رفع "${file.name}": ${err.message}`); }
       }
       submitBtn.textContent = '📤 حفظ وإرسال للطبيب';
       submitBtn.disabled = false;
     }
     const initState = consultDepts.length ? 'consulting' : 'awaiting_final';
     r.timeline.push({ ts: nowIso(), from: 'new', to: initState, user: CURRENT_USER.full_name, role: CURRENT_USER.role, user_id: CURRENT_USER.id, action: 'إنشاء الإحالة', details: { القسم_النهائي: targetSpecialty, الأقسام_المستشارة: consultDepts.join('، ') || '—' } });
+    DATA.meta.seq++;
+    Object.assign(DATA.attachments, stagedAttachments);
     DATA.referrals.push(r);
     if (consultDepts.length) {
       DATA.users.filter(u => u.role === 'doctor' && u.active && consultDepts.includes(u.department)).forEach(u => notifyUser(u.id, id, '🩺 إحالة جديدة بانتظار رأي قسمك'));
@@ -2241,7 +2413,7 @@ function openDetail(id) {
   const r = DATA.referrals.find(x => x.id === id);
   if (!r) return toast('غير موجود', 'err');
 
-  DATA.notifications.forEach(n => { if (n.referral_id === id) n.read = true; });
+  DATA.notifications.forEach(n => { if (n.referral_id === id) markNotificationForCurrentUser(n); });
   if (CURRENT_USER.role === 'doctor' && !r.doctor_viewed_at) r.doctor_viewed_at = nowIso();
   saveData();
 
@@ -2430,10 +2602,10 @@ function renderCombinedDoctorForm(r) {
         <div class="field full"><label>اختر الإجراء *</label>
           <input name="action_type" id="doctor-action-type" list="doctor-action-options" required placeholder="اكتب الإجراء أو اختر من القائمة" oninput="onDoctorActionChange(this)">
           <datalist id="doctor-action-options">
-            <option value="doctor_accepted">${isFinal ? 'قبول نهائي' : 'قبول الإحالة'}</option>
+            ${isConsul ? '' : `<option value="doctor_accepted">${isFinal ? 'قبول نهائي' : 'قبول الإحالة'}</option>`}
             <option value="doctor_rejected">${isFinal ? 'رفض نهائي' : 'رفض الإحالة'}</option>
             <option value="info_requested">طلب مزيد من المعلومات</option>
-            ${isConsul && !isFinal ? '<option value="consultation_done">استشارة طبية</option>' : ''}
+            ${isConsul ? '<option value="consultation_done">استشارة طبية</option>' : ''}
           </datalist>
         </div>
         <div id="doctor-action-fields" class="full"></div>
@@ -2495,7 +2667,7 @@ function onDoctorActionChange(sel) {
     const meta = REFERRAL_TYPE_META[priority];
     wrapper.innerHTML = `
       ${meta ? `<div class="field full"><div class="notice info" style="margin:0">✓ القبول كـ: <b>${meta.admission}</b>${needWard ? ' — اختر القسم' : ''}</div></div>` : ''}
-      ${priority === 'طارئ' ? `<div class="field full"><label>قبول الطوارئ؟ *</label><select name="emergency_accept" required onchange="onEmergencyDecisionChange(this)"><option value="">— اختر —</option><option value="نعم">نعم — قبول للتنويم</option><option value="لا">لا — رفض الطوارئ</option></select></div><div id="emergency-decision-fields" class="field full"></div>` : (needWard ? `<div class="field full"><label>${priority === 'تنويم عادي' ? 'قسم التنويم / نوع السرير العادي *' : 'القسم / نوع السرير *'}</label><input name="ward_type" list="bed-type-options" required placeholder="${priority === 'تنويم عادي' ? 'قسم تنويم / سرير تنويم عادي' : 'اكتب نوع السرير أو اختره'}"><datalist id="bed-type-options">${BED_TYPE_OPTIONS.map(o => `<option value="${esc(o)}">`).join('')}</datalist></div>` : `<input type="hidden" name="ward_type" value="">`)}
+      ${priority === 'طارئ' ? `<div class="field full"><label>قبول الطوارئ؟ *</label><select name="emergency_accept" required onchange="onEmergencyDecisionChange(this)"><option value="">— اختر —</option><option value="نعم">نعم — قبول للتنويم</option><option value="لا">لا — رفض الطوارئ</option></select></div><div id="emergency-decision-fields" class="field full"></div>` : (needWard ? `<div class="field full"><label>${priority === 'تنويم عادي' ? 'قسم التنويم / نوع السرير العادي *' : 'القسم / نوع السرير *'}</label><input name="ward_type" list="bed-type-options" required placeholder="${priority === 'تنويم عادي' ? 'قسم تنويم / سرير تنويم عادي' : 'اكتب نوع السرير أو اختره'}"><datalist id="bed-type-options">${BED_TYPE_OPTIONS.filter(o => priority !== 'تنويم عادي' || o !== 'طوارئ').map(o => `<option value="${esc(o)}">`).join('')}</datalist></div>` : `<input type="hidden" name="ward_type" value="">`)}
       <div class="field full"><label>الجوال المسجل للطبيب</label><input type="tel" value="${esc(mobileVal)}" readonly aria-readonly="true"><input type="hidden" name="doctor_mobile" value="${esc(mobileVal)}"></div>
       <div class="field full"><label>ردك *</label><textarea name="notes" required style="min-height:110px"></textarea></div>`;
   } else if (v === 'doctor_rejected') {
@@ -2660,6 +2832,7 @@ function saveBedRecord(e, id) {
   const duplicate = DATA.beds.find(x => x.number === d.number && x.id !== id);
   if (duplicate) return toast('رقم الغرفة مستخدم في سجل آخر', 'err');
   const existing = id ? DATA.beds.find(x => x.id === id) : null;
+  if (existing?.current_referral && d.available === 'نعم' && !confirm('السرير مرتبط بحالة سابقة. هل تؤكد خروج المريض وإتاحة السرير؟')) return;
   const bed = existing || { id: uid(), current_patient: null, current_referral: null, updated_at: nowIso() };
   Object.assign(bed, {
     number: d.number.trim(), type: d.type, ward: d.ward.trim(), available: d.available === 'نعم',
@@ -2667,6 +2840,7 @@ function saveBedRecord(e, id) {
     reservation_duration: d.reservation_duration || '', duration: d.reservation_duration || '', notes: d.notes || '',
     employee_id: CURRENT_USER.username, employee_name: CURRENT_USER.full_name, updated_at: nowIso()
   });
+  if (bed.available) { bed.current_patient = null; bed.current_referral = null; }
   if (!existing) DATA.beds.push(bed);
   saveData(); audit(existing ? 'bed_record_updated' : 'bed_record_created', 'bed', bed.id, bed.number);
   closeModal(); toast('✓ تم حفظ سجل السرير', 'ok'); renderBedManagement();
@@ -2676,12 +2850,7 @@ function saveBedRecord(e, id) {
 // الإشعارات
 // ═══════════════════════════════════════════════════════════════════
 function renderNotifications() {
-  const myNotifs = DATA.notifications.filter(n => {
-    if (n.user_id && n.user_id === CURRENT_USER.id) return true;
-    if (!n.user_id && (n.role === CURRENT_USER.role || n.role === 'all')) return true;
-    return false;
-  }).slice(0, 100);
-
+  const myNotifs = DATA.notifications.filter(notificationBelongsToUser).slice(0, 100);
   if (!myNotifs.length) {
     $('content').innerHTML = '<div class="panel"><div class="empty"><div class="empty-icon">🔔</div>لا توجد إشعارات</div></div>';
     return;
@@ -2690,10 +2859,11 @@ function renderNotifications() {
   const items = myNotifs.map(n => {
     const r = n.referral_id ? DATA.referrals.find(x => x.id === n.referral_id) : null;
     const st = r ? STATES[r.status] : {};
+    const isRead = notificationIsRead(n);
     const icons = { coordinator: '📥', doctor: '🩺', beds: '🛏', admin: '👑' };
     const clickAttr = n.referral_id ? `onclick="openDetail('${esc(n.referral_id)}')"` : `onclick="showPage('users')"`;
-    return `<div class="notif-item ${n.read ? '' : 'unread'}" ${clickAttr}>
-      <div class="icon" style="background:${n.read ? '#f2f5f7' : '#e8f4f8'}">${icons[n.role] || '🔔'}</div>
+    return `<div class="notif-item ${isRead ? '' : 'unread'} ${r?.priority === 'طارئ' && CURRENT_USER.role === 'coordinator' ? 'emergency' : ''}" ${clickAttr}>
+      <div class="icon" style="background:${isRead ? '#f2f5f7' : '#e8f4f8'}">${icons[n.role] || '🔔'}</div>
       <div style="flex:1;min-width:0">
         <div style="font-weight:600;color:var(--navy);margin-bottom:4px">${esc(n.message)}</div>
         <div style="font-size:12px;color:var(--muted)">
@@ -2701,7 +2871,7 @@ function renderNotifications() {
           ${st.label ? `<br><span class="pill ${st.cls}" style="margin-top:6px">${st.label}</span>` : ''}
         </div>
       </div>
-      ${n.read ? '' : '<div style="background:var(--teal);width:8px;height:8px;border-radius:50%;align-self:center"></div>'}
+      ${isRead ? '' : '<div style="background:var(--teal);width:8px;height:8px;border-radius:50%;align-self:center"></div>'}
     </div>`;
   }).join('');
 
@@ -2716,15 +2886,18 @@ function renderNotifications() {
 
 function deleteAllNotifications() {
   if (!CURRENT_USER) return;
-  if (!confirm('حذف جميع إشعارات حسابك نهائيًا؟')) return;
-  DATA.notifications = DATA.notifications.filter(n => n.user_id ? n.user_id !== CURRENT_USER.id : !(n.role === CURRENT_USER.role || n.role === 'all'));
+  if (!confirm('إزالة جميع الإشعارات من حسابك؟ لن تُزال الإشعارات المشتركة من حسابات الآخرين.')) return;
+  DATA.notifications = DATA.notifications.filter(n => {
+    if (!notificationBelongsToUser(n)) return true;
+    if (n.user_id) return false;
+    n.dismissed_by = Array.from(new Set([...(n.dismissed_by || []), CURRENT_USER.id]));
+    n.updated_at = nowIso();
+    return true;
+  });
   saveData(); toast('✓ تم حذف الإشعارات', 'ok'); renderNotifications(); buildNav();
 }
 function markAllRead() {
-  DATA.notifications.forEach(n => {
-    if (n.user_id === CURRENT_USER.id) n.read = true;
-    else if (!n.user_id && (n.role === CURRENT_USER.role || n.role === 'all')) n.read = true;
-  });
+  DATA.notifications.forEach(markNotificationForCurrentUser);
   saveData();
   renderNotifications();
   buildNav();
@@ -2742,31 +2915,7 @@ function exportStateJson() {
   toast('✓ تم تصدير نسخة JSON محلية', 'ok');
 }
 
-function chooseStateImport() {
-  if (CURRENT_USER?.role !== 'admin') return toast('الاستيراد متاح لمدير النظام فقط', 'err');
-  const input = document.createElement('input'); input.type = 'file'; input.accept = 'application/json,.json';
-  input.onchange = () => { if (input.files?.[0]) importStateJson(input.files[0]); }; input.click();
-}
-
-async function importStateJson(file) {
-  try {
-    if (file.size > 25 * 1024 * 1024) throw new Error('حجم ملف JSON يتجاوز 25 م.ب');
-    const parsed = JSON.parse(await file.text());
-    if (!parsed || Array.isArray(parsed) || parsed.meta?.version !== 'v6') throw new Error('ملف غير صالح أو إصدار غير مدعوم');
-    for (const key of ['users','referrals','beds','audit','notifications','chats','shifts']) if (!Array.isArray(parsed[key])) throw new Error(`الحقل ${key} غير صالح`);
-    if (!parsed.attachments || typeof parsed.attachments !== 'object' || Array.isArray(parsed.attachments)) parsed.attachments = {};
-    const revision = Number(parsed.meta.sync_revision || 0);
-    if (!Number.isInteger(revision) || revision < 0) throw new Error('إصدار المزامنة غير صالح');
-    if (!confirm('سيتم إرسال هذه النسخة إلى الخادم واستبدال الحالة الحالية بشكل ذري. لن يُنفذ DELETE أو تصفير تلقائي. هل تريد المتابعة؟')) return;
-    const res = await fetch(API_IMPORT, { method: 'POST', cache: 'no-store', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(parsed) });
-    const body = await res.json().catch(() => ({}));
-    if (res.status === 409) throw new Error('تعارض: توجد نسخة أحدث على الخادم. نفّذ مزامنة ثم أعد المحاولة.');
-    if (!res.ok || !body?.data) throw new Error(body?.error || `فشل الاستيراد (${res.status})`);
-    DATA = body.data; LAST_REMOTE_REVISION = Number(DATA.meta?.sync_revision || body.revision || 0); LOCAL_CHANGE_AT = DATA.meta?.local_updated_at || ''; _syncBlocked = false;
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(DATA));
-    toast('✓ تم استيراد النسخة إلى الخادم بنجاح', 'ok'); showPage('db_monitor');
-  } catch (e) { toast('تعذر الاستيراد: ' + e.message, 'err'); }
-}
+function chooseStateImport() { toast('استيراد الحالة معلّق حتى تفعيل صلاحيات الخادم وآلية استعادة آمنة', 'err'); }
 
 function resetOperationalDataSafe() {
   if (CURRENT_USER?.role !== 'admin') return toast('التصفير متاح لمدير النظام فقط', 'err');
@@ -2779,7 +2928,7 @@ function resetOperationalDataSafe() {
   (DATA.chats || []).forEach(chat => { chat.messages = []; chat.reads = {}; });
   (DATA.beds || []).forEach(bed => { bed.available = true; bed.current_patient = null; bed.current_referral = null; bed.updated_at = nowIso(); });
   DATA.meta.seq = 0; DATA.meta.auditSeq = 0; DATA.meta.notifSeq = 0;
-  addAudit('operational_reset', 'system', 'all', 'تم مسح البيانات التشغيلية مع الحفاظ على الحسابات والمرفقات');
+  audit('operational_reset', 'system', 'all', 'تم مسح البيانات التشغيلية مع الحفاظ على الحسابات والمرفقات');
   toast('✓ تم مسح البيانات التشغيلية وتصفير العدادات', 'ok');
   showPage('db_monitor');
 }
@@ -2795,25 +2944,14 @@ function freshResetSystemSafe() {
   (DATA.chats || []).forEach(chat => { chat.messages = []; chat.reads = {}; });
   (DATA.beds || []).forEach(bed => { bed.available = true; bed.current_patient = null; bed.current_referral = null; bed.updated_at = nowIso(); });
   DATA.meta.seq = 0; DATA.meta.auditSeq = 0; DATA.meta.notifSeq = 0; DATA.meta.seed_done = true;
-  addAudit('fresh_operational_reset', 'system', 'all', 'إعادة الحالة التشغيلية للبداية مع الحفاظ على الحسابات والمرفقات');
+  audit('fresh_operational_reset', 'system', 'all', 'إعادة الحالة التشغيلية للبداية مع الحفاظ على الحسابات والمرفقات');
   toast('✓ تمت إعادة الحالة التشغيلية للبداية بأمان', 'ok');
   showPage('db_monitor');
 }
 
 async function purgeDatabaseSafe() {
   if (CURRENT_USER?.role !== 'admin') return toast('الحذف الكامل متاح لمدير النظام فقط', 'err');
-  const adminKey = prompt('أدخل مفتاح الحذف الإداري المهيأ في Vercel (لا يظهر على الشاشة)');
-  if (!adminKey) return toast('تم إلغاء الحذف', 'warn');
-  if (prompt('للحذف الكامل اكتب العبارة حرفيًا: تأكيد حذف قاعدة البيانات بالكامل') !== 'تأكيد حذف قاعدة البيانات بالكامل') return toast('تم إلغاء الحذف', 'warn');
-  if (!confirm('سيحذف هذا الإجراء الحالة الأساسية وكل الإحالات والمحادثات والمستخدمين والمناوبات وسجل التدقيق وملفات المرفقات من Supabase. لا يمكن التراجع عنه. متابعة؟')) return;
-  try {
-    const res = await fetch('/api/state', { method: 'DELETE', cache: 'no-store', headers: { 'X-Wasl-Admin-Key': adminKey, 'X-Wasl-Admin-Confirm': 'تأكيد حذف قاعدة البيانات بالكامل' } });
-    const body = await res.json().catch(() => ({}));
-    if (!res.ok) throw new Error(body.error || `فشل الحذف (${res.status})`);
-    localStorage.clear(); sessionStorage.clear();
-    alert(`تم الحذف الكامل بنجاح. عدد ملفات المرفقات المحذوفة: ${body.deleted_attachments || 0}`);
-    location.reload();
-  } catch (e) { toast('تعذر الحذف الكامل: ' + e.message, 'err'); }
+  return toast('الحذف الشامل معطّل مؤقتاً إلى حين تطبيق صلاحيات إدارية موثقة على الخادم', 'warn');
 }
 function renderDbMonitor() {
   if (CURRENT_USER?.role !== 'admin') return showPage('dashboard');
@@ -2822,9 +2960,9 @@ function renderDbMonitor() {
   const quotaClass = quotaPct >= 90 ? 'crit' : (quotaPct >= 70 ? 'warn' : '');
   const rows = [['الإحالات', DATA.referrals.length],['المستخدمون', DATA.users.length],['الأسرة', DATA.beds.length],['المحادثات', DATA.chats.length],['المناوبات', DATA.shifts.length],['بيانات المرفقات', Object.keys(DATA.attachments || {}).length],['سجل التدقيق', DATA.audit.length],['الإشعارات', DATA.notifications.length]];
   $('content').innerHTML = `<div class="stats"><div class="stat"><label>إصدار الخادم</label><strong>${Number(DATA.meta?.sync_revision || 0)}</strong></div><div class="stat"><label>حجم الحالة التقريبي</label><strong>${sizeKb.toFixed(1)} KB</strong></div><div class="stat"><label>حالة المزامنة</label><strong>${_syncBlocked ? 'متعارضة' : 'Supabase'}</strong></div><div class="stat"><label>آخر تعديل محلي</label><strong style="font-size:12px;direction:ltr">${esc(DATA.meta?.local_updated_at || '—')}</strong></div></div>
-    <div class="panel"><h3>📡 مراقبة القاعدة والسعة والمزامنة</h3><div class="notice info">المؤشر التالي تقديري لحجم حالة JSON مقارنة بحد إرشادي قدره ${FREE_QUOTA_KB.toLocaleString('en-US')} KB. لا يمثل قياس Supabase الكامل، ولا يتم حذف أو تصفير قاعدة الإنتاج تلقائياً.</div><div style="display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap"><b>${sizeKb.toFixed(1)} KB / ${FREE_QUOTA_KB.toLocaleString('en-US')} KB</b><span>${quotaPct}%</span></div><div class="quota-meter" aria-label="مؤشر سعة الحالة"><div class="quota-fill ${quotaClass}" style="width:${Math.max(2, quotaPct)}%"></div></div>${quotaPct >= 70 ? `<div class="notice ${quotaPct >= 90 ? 'danger' : 'warn'}">⚠️ اقترب حجم الحالة من الحد الإرشادي. صدّر نسخة JSON قبل أي عملية تنظيف.</div>` : ''}<div style="display:flex;gap:8px;flex-wrap:wrap"><button class="primary" onclick="syncNow()">🔄 مزامنة الآن</button><button class="secondary" onclick="exportStateJson()">⬇ تصدير JSON</button><button class="warn" onclick="chooseStateImport()">⬆ استيراد JSON إلى الخادم</button></div><div class="twrap" style="margin-top:16px"><table class="t" style="min-width:520px"><thead><tr><th>المخزن</th><th>العدد</th></tr></thead><tbody>${rows.map(([k,v]) => `<tr><td><b>${esc(k)}</b></td><td dir="ltr">${Number(v).toLocaleString('en-US')}</td></tr>`).join('')}</tbody></table></div></div>
+    <div class="panel"><h3>📡 مراقبة القاعدة والسعة والمزامنة</h3><div class="notice info">المؤشر التالي تقديري لحجم حالة JSON مقارنة بحد إرشادي قدره ${FREE_QUOTA_KB.toLocaleString('en-US')} KB. لا يمثل قياس Supabase الكامل، ولا يتم حذف أو تصفير قاعدة الإنتاج تلقائياً.</div><div style="display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap"><b>${sizeKb.toFixed(1)} KB / ${FREE_QUOTA_KB.toLocaleString('en-US')} KB</b><span>${quotaPct}%</span></div><div class="quota-meter" aria-label="مؤشر سعة الحالة"><div class="quota-fill ${quotaClass}" style="width:${Math.max(2, quotaPct)}%"></div></div>${quotaPct >= 70 ? `<div class="notice ${quotaPct >= 90 ? 'danger' : 'warn'}">⚠️ اقترب حجم الحالة من الحد الإرشادي. صدّر نسخة JSON قبل أي عملية تنظيف.</div>` : ''}<div style="display:flex;gap:8px;flex-wrap:wrap"><button class="primary" onclick="syncNow()">🔄 مزامنة الآن</button><button class="secondary" onclick="exportStateJson()">⬇ تصدير JSON</button><button class="warn" disabled title="معلّق حتى تفعيل صلاحيات الخادم والاستيراد الآمن">⬆ استيراد JSON معلّق مؤقتًا</button></div><div class="twrap" style="margin-top:16px"><table class="t" style="min-width:520px"><thead><tr><th>المخزن</th><th>العدد</th></tr></thead><tbody>${rows.map(([k,v]) => `<tr><td><b>${esc(k)}</b></td><td dir="ltr">${Number(v).toLocaleString('en-US')}</td></tr>`).join('')}</tbody></table></div></div>
     <div class="panel"><h3 style="color:var(--red)">🧹 تنظيف الحالة التشغيلية</h3><div class="notice danger">هذه العمليات تكتب حالة جديدة إلى Supabase بعد تأكيدين صريحين. الحسابات وكلمات المرور والمرفقات لا تُحذف في التنظيف التشغيلي.</div><div style="display:flex;gap:8px;flex-wrap:wrap"><button class="warn" onclick="resetOperationalDataSafe()">مسح البيانات التشغيلية وتصفير العدادات</button><button class="danger" onclick="freshResetSystemSafe()">إعادة الحالة التشغيلية للبداية</button></div></div>
-    <div class="panel" style="border:2px solid var(--red)"><h3 style="color:var(--red)">⚠ حذف كامل لقاعدة الإنتاج والمرفقات</h3><div class="notice danger">للمدير فقط: يحذف الحالة الأساسية وملفات Supabase Storage والمستخدمين والمحادثات نهائيًا. لا يظهر هذا الإجراء إلا هنا ويتطلب مفتاحًا سريًا من بيئة Vercel وعبارة تأكيد حرفية وتأكيدًا ثانيًا.</div><button class="danger" onclick="purgeDatabaseSafe()">حذف قاعدة البيانات والمرفقات نهائيًا</button></div>`;
+    <div class="panel" style="border:2px solid var(--red)"><h3 style="color:var(--red)">⚠ حذف كامل لقاعدة الإنتاج والمرفقات</h3><div class="notice danger">الحذف الشامل معطّل مؤقتاً حتى تطبيق مصادقة وصلاحيات إدارية على الخادم، والتحقق من جميع ملفات التخزين والنسخ الاحتياطية. لم تُحذف أي بيانات.</div><button class="danger" disabled aria-disabled="true">الحذف الشامل غير متاح مؤقتاً</button></div>`;
 }
 
 // ═══════════════════════════════════════════════════════════════════
@@ -2850,6 +2988,7 @@ async function openPrint(id) {
   const creatorUser = DATA.users.find(u => u.id === r.created_by);
   const doctorUser  = r.assigned_doctor_id ? DATA.users.find(u => u.id === r.assigned_doctor_id) : null;
   const bedUser     = r.bed_approved_by ? DATA.users.find(u => u.id === r.bed_approved_by) : null;
+  const bedRecord   = r.bed_id ? DATA.beds.find(b => b.id === r.bed_id) : null;
 
   const d = {
     refNo: refNoOf(r), refDate: dateStr(r.created_at),
@@ -2857,8 +2996,8 @@ async function openPrint(id) {
     dept: r.specialty || '—', isReverse: r.is_reverse === 'نعم',
     referralType: r.priority || '—',
     patientName: r.patient_name || '—', mrn: r.mrn || '—', age: r.age || '—', gender: r.gender || '—',
-    nationality: 'سعودي', diagnosis: r.diagnosis || '—',
-    doctorName: doctorUser ? doctorUser.full_name : '—', doctorMobile: r.doctor_mobile || '',
+    nationality: r.nationality || '—', diagnosis: r.diagnosis || '—',
+    doctorName: r.assigned_doctor_name || (doctorUser ? doctorUser.full_name : '—'), doctorMobile: r.doctor_mobile || '',
     clinicalText: r.doctor_notes || r.supplement_notes || '—',
     clinicDept: r.specialty || '—', clinicSlot: '', clinicDate: '', clinicInstructions: r.bed_notes || '—',
     consultationOpinion: r.consultation_opinion || r.doctor_notes || '—',
@@ -2872,7 +3011,7 @@ async function openPrint(id) {
     bedType: r.bed_type || (isDirectER(r) ? 'طوارئ / ER' : '—'),
     bedRoomNo: r.bed_number || '—',
     bedDept: r.bed_ward || (isDirectER(r) ? 'طوارئ / Emergency' : '—'),
-    bedAdmissionDate: dateStr(r.bed_approved_at || r.completed_at || r.doctor_responded_at),
+    bedAdmissionDate: dateStr(r.admission_date || bedRecord?.admission_date || ''),
     bedDuration: r.bed_duration || '', bedAdmissionNotes: r.bed_notes || r.closure_notes || '—',
     rejectionReason: r.rejection_reason || r.bed_rejection_reason || '—',
     missingList: r.needed_info || '—',
@@ -3048,7 +3187,7 @@ body { font-family: 'Cairo', sans-serif; margin: 0; padding: 0; background: #fff
 .footer-text { text-align: center; font-size: 7pt; color: #334155; margin-top: 6px; border-top: 1px solid #cbd5e1; padding-top: 4px; line-height: 1.3; }
 .print-btn { position: fixed; top: 10px; left: 10px; padding: 10px 18px; background: #059669; color: #fff; border: none; border-radius: 6px; cursor: pointer; font-weight: 700; font-size: 13px; z-index: 99; font-family: inherit; box-shadow: 0 4px 12px rgba(0,0,0,.2); }
 .print-btn:disabled { background: #94a3b8; cursor: wait; }
-@media print { @page { size: A4 portrait; margin: 0; } html, body { height: 100% !important; margin: 0 !important; padding: 0 !important; background: #fff !important; overflow: hidden !important; } .print-btn { display: none !important; } .preview-wrapper { padding: 0 !important; display: block !important; } .doc-container { border: none !important; padding: 6mm 8mm !important; width: 100% !important; min-height: auto !important; } .tbl-header, tr.tbl-header, th.tbl-header, td.tbl-header { background-color: var(--theme-color) !important; color: #fff !important; } .badge-sub { background-color: var(--theme-light) !important; border-color: var(--theme-color) !important; color: var(--theme-color) !important; } .print-header { border-bottom: 3px solid var(--theme-color) !important; } .tmpl-table { page-break-inside: avoid; } }
+@media print { @page { size: A4 portrait; margin: 0; } html, body { height: auto !important; margin: 0 !important; padding: 0 !important; background: #fff !important; overflow: visible !important; } .print-btn { display: none !important; } .preview-wrapper { padding: 0 !important; display: block !important; } .doc-container { border: none !important; padding: 6mm 8mm !important; width: 100% !important; min-height: auto !important; } .tbl-header, tr.tbl-header, th.tbl-header, td.tbl-header { background-color: var(--theme-color) !important; color: #fff !important; } .badge-sub { background-color: var(--theme-light) !important; border-color: var(--theme-color) !important; color: var(--theme-color) !important; } .print-header { border-bottom: 3px solid var(--theme-color) !important; } .tmpl-table { page-break-inside: avoid; } }
 </style></head><body>
 <button class="print-btn" id="printBtn" disabled onclick="window.print()">🖨️ طباعة</button>
 <div class="preview-wrapper"><div class="doc-container">${header}${topBar}${patientBlock}${content}${footer}</div></div>
@@ -3114,8 +3253,9 @@ function renderUsers() {
       <td style="direction:ltr;text-align:right">${esc(u.mobile || '—')}</td>
       <td>${u.active ? '<span class="pill p-done">نشط</span>' : '<span class="pill p-r">معطل</span>'}${locked ? ' <span class="pill p-warn">مقفل</span>' : ''}</td>
       <td style="white-space:nowrap">
+        <button class="ghost xs" onclick="openEditUser('${u.id}')">✏ تعديل</button>
         <button class="ghost xs" onclick="resetUserPassword('${u.id}')">🔑</button>
-        <button class="ghost xs" onclick="editUserMobile('${u.id}')">📱</button>
+        ${u.role !== 'doctor' && !u.mobile_locked ? `<button class="ghost xs" onclick="editUserMobile('${u.id}')">📱</button>` : ''}
         ${locked ? `<button class="ghost xs" onclick="unlockUser('${u.id}')">🔓</button>` : ''}
         ${u.username === 'admin' ? '' : `<button class="ghost xs" onclick="toggleUser('${u.id}')">${u.active ? 'تعطيل' : 'تفعيل'}</button><button class="danger xs" onclick="deleteUser('${u.id}')">🗑 حذف</button>`}
       </td>
@@ -3138,29 +3278,67 @@ function renderUsers() {
 }
 
 function toggleUser(id) {
+  if (CURRENT_USER?.role !== 'admin') return toast('غير مصرح', 'err');
   const u = DATA.users.find(x => x.id === id);
-  if (!u) return;
+  if (!u || u.id === CURRENT_USER.id || u.username === 'admin') return;
   u.active = !u.active;
+  u.updated_at = nowIso();
   saveData(); audit('user_toggled', 'user', id, `${u.username} → ${u.active}`);
   renderUsers();
 }
 function unlockUser(id) {
+  if (CURRENT_USER?.role !== 'admin') return toast('غير مصرح', 'err');
   const u = DATA.users.find(x => x.id === id);
   if (!u) return;
   u.locked_until = null; u.failed_attempts = 0;
   saveData(); toast('✓ فك القفل', 'ok'); renderUsers();
 }
 function editUserMobile(id) {
+  if (CURRENT_USER?.role !== 'admin') return toast('غير مصرح', 'err');
   const u = DATA.users.find(x => x.id === id);
   if (!u) return;
+  if (u.role === 'doctor' || u.mobile_locked) return toast('رقم جوال الطبيب مثبت ولا يمكن تعديله', 'err');
   const nm = prompt(`جوال "${u.username}":`, u.mobile || '05XXXXXXXX');
   if (nm === null) return;
   const err = validateMobile(nm.trim());
   if (err) return toast('❌ ' + err, 'err');
-  u.mobile = nm.trim(); saveData(); toast('✓', 'ok'); renderUsers();
+  u.mobile = nm.trim(); u.updated_at = nowIso(); saveData(); audit('user_mobile_updated', 'user', id, u.username); toast('✓', 'ok'); renderUsers();
+}
+function openEditUser(id) {
+  if (CURRENT_USER?.role !== 'admin') return toast('غير مصرح', 'err');
+  const u = DATA.users.find(x => x.id === id);
+  if (!u) return toast('المستخدم غير موجود', 'err');
+  const protectedAdmin = u.id === CURRENT_USER.id || u.username === 'admin';
+  const roles = [['coordinator', 'منسق'], ['doctor', 'طبيب'], ['beds', 'إدارة أسرة'], ['admin', 'مدير']];
+  $('modalRoot').innerHTML = `<div class="modal-back" onclick="if(event.target===this)closeModal()"><div class="modal" style="max-width:560px">
+    <div class="mh"><h3>تعديل بيانات المستخدم</h3><button class="ghost sm" type="button" onclick="closeModal()">✕</button></div>
+    <form onsubmit="saveUserEdit(event,'${esc(id)}')" class="grid2">
+      <div class="field"><label>اسم المستخدم</label><input value="${esc(u.username)}" readonly></div>
+      <div class="field"><label>الاسم *</label><input name="full_name" value="${esc(u.full_name)}" required></div>
+      <div class="field"><label>الدور *</label><select name="role" ${protectedAdmin ? 'disabled' : ''}>${roles.map(([value,label]) => `<option value="${value}" ${u.role === value ? 'selected' : ''}>${label}</option>`).join('')}</select></div>
+      <div class="field"><label>القسم للطبيب</label><input name="department" list="edit-user-depts" value="${esc(u.department || '')}"><datalist id="edit-user-depts">${DEPARTMENTS.map(d => `<option value="${esc(d)}">`).join('')}</datalist></div>
+      <div class="field full"><label>الجوال ${u.role === 'doctor' ? '(ثابت للطبيب)' : ''}</label><input value="${esc(u.mobile || '')}" readonly></div>
+      <div class="full"><button class="primary" type="submit">حفظ التعديل</button></div>
+    </form></div></div>`;
+}
+function saveUserEdit(event, id) {
+  event.preventDefault();
+  if (CURRENT_USER?.role !== 'admin') return toast('غير مصرح', 'err');
+  const u = DATA.users.find(x => x.id === id);
+  if (!u) return toast('المستخدم غير موجود', 'err');
+  const d = new FormData(event.target);
+  const fullName = String(d.get('full_name') || '').trim();
+  const role = d.get('role') || u.role;
+  const department = String(d.get('department') || '').trim();
+  if (!fullName || !['coordinator', 'doctor', 'beds', 'admin'].includes(role)) return toast('البيانات غير صالحة', 'err');
+  if (role === 'doctor' && !department) return toast('القسم مطلوب للطبيب', 'err');
+  if ((u.id === CURRENT_USER.id || u.username === 'admin') && role !== 'admin') return toast('لا يمكن تغيير دور حساب المدير الحالي', 'err');
+  Object.assign(u, { full_name: fullName, mobile_locked: !!u.mobile_locked || u.role === 'doctor' || role === 'doctor', role, department: role === 'doctor' ? department : null, updated_at: nowIso() });
+  saveData(); audit('user_updated', 'user', id, u.username); closeModal(); renderUsers(); toast('✓ تم تعديل بيانات المستخدم', 'ok');
 }
 function addUser(e) {
   e.preventDefault();
+  if (CURRENT_USER?.role !== 'admin') return toast('غير مصرح', 'err');
   const d = Object.fromEntries(new FormData(e.target));
   if (DATA.users.some(u => u.username === d.username)) return toast('مستخدم مسبقاً', 'err');
   const pwErrors = validatePasswordPolicy(d.password, d.username);
@@ -3223,7 +3401,7 @@ function renderChatPage() {
   $('main').innerHTML = `
     ${onCall.length ? `<div class="oncall-banner"><h4>🔔 المناوبون الآن</h4><div class="oncall-list">${onCall.map(s => `<span class="oncall-chip">${esc(s.user_name)} — ${esc(s.shift)}</span>`).join('')}</div></div>` : ''}
     <div class="chat-wrap">
-      <div class="chat-side" id="chatSide">
+      <div class="chat-side show" id="chatSide">
         <div class="chat-head"><strong style="font-size:14px;color:var(--navy)">💬 المحادثات</strong><button class="primary xs" onclick="showNewChatPicker()" title="محادثة جديدة">＋</button></div>
         <div class="chat-tab">
           <button class="${CHAT_TAB==='direct'?'active':''}" onclick="CHAT_TAB='direct';renderChatPage()">💬 مباشر ${directChats.filter(c=>getUnreadCount(c)>0).length ? `<span class="cnt">${directChats.filter(c=>getUnreadCount(c)>0).length}</span>` : ''}</button>
@@ -3245,6 +3423,42 @@ function renderChatPage() {
       </div>
       <div class="chat-main" id="chatMain">${renderChatMain()}</div>
     </div>`;
+}
+
+function loadChatImages() {
+  document.querySelectorAll('#chatMsgs img[data-att]').forEach(async img => {
+    try {
+      const blob = await attsGet(img.getAttribute('data-att'));
+      if (!blob || !img.isConnected) return;
+      const url = URL.createObjectURL(blob);
+      img.src = url;
+      img.dataset.objectUrl = url;
+    } catch (e) { console.warn('[WASL] تعذر تحميل صورة المحادثة:', e.message); }
+  });
+}
+function refreshLiveChat() {
+  if (!$('chatSide')) return;
+  const old = Object.fromEntries(['chatText', 'chatImgInput', 'chatPdfInput', 'chatFilePreview'].map(id => [id, $(id)]));
+  const focused = document.activeElement === old.chatText;
+  const start = focused ? old.chatText.selectionStart : null;
+  const end = focused ? old.chatText.selectionEnd : null;
+  const chatVisible = $('chatMain')?.classList.contains('show');
+  const sideVisible = $('chatSide')?.classList.contains('show');
+  const scroller = $('chatMsgs');
+  const scrollTop = scroller?.scrollTop || 0;
+  const wasAtBottom = scroller && scroller.scrollHeight - scroller.clientHeight - scroller.scrollTop < 80;
+  document.querySelectorAll('#chatMsgs img[data-object-url]').forEach(img => URL.revokeObjectURL(img.dataset.objectUrl));
+  renderChatPage();
+  for (const [id, element] of Object.entries(old)) if (element && $(id)) $(id).replaceWith(element);
+  $('chatMain')?.classList.toggle('show', !!chatVisible);
+  $('chatSide')?.classList.toggle('show', !!sideVisible);
+  if (focused && old.chatText?.isConnected) {
+    old.chatText.focus();
+    old.chatText.setSelectionRange(start, end);
+  }
+  const updatedScroller = $('chatMsgs');
+  if (updatedScroller) updatedScroller.scrollTop = wasAtBottom ? updatedScroller.scrollHeight : scrollTop;
+  loadChatImages();
 }
 
 function renderChatMain() {
@@ -3315,12 +3529,12 @@ function handleChatFileSelect(inp) {
   if (!inp.files || !inp.files.length) return;
   const allowed = [];
   const rejected = [];
-  const MAX_SIZE = 15 * 1024 * 1024;
+  const MAX_SIZE = ATTACHMENT_MAX_BYTES;
   Array.from(inp.files).forEach(f => {
     const isImage = (f.type || '').startsWith('image/');
     const isPdf = f.type === 'application/pdf';
     if (!isImage && !isPdf) rejected.push(f.name + ' (نوع غير مسموح)');
-    else if (f.size > MAX_SIZE) rejected.push(f.name + ' (أكبر من 15 م.ب)');
+    else if (f.size > MAX_SIZE) rejected.push(f.name + ' (أكبر من 4 م.ب)');
     else allowed.push(f);
   });
   if (rejected.length) {
@@ -3342,11 +3556,10 @@ async function submitChatMessage(e, chatId) {
   const ta = $('chatText');
   const fiImg = $('chatImgInput'); const fiPdf = $('chatPdfInput');
   const text = ta ? ta.value.trim() : '';
-  let files = [];
-  if (fiImg && fiImg.files && fiImg.files.length) files = Array.from(fiImg.files);
-  else if (fiPdf && fiPdf.files && fiPdf.files.length) files = Array.from(fiPdf.files);
+  const files = [...Array.from(fiImg?.files || []), ...Array.from(fiPdf?.files || [])];
   if (!text && !files.length) return;
-  await sendChatMessage(chatId, text, files);
+  const result = await sendChatMessage(chatId, text, files);
+  if (!result?.ok) return toast(result?.error || 'تعذر إرسال الرسالة؛ احتُفظ بالمسودة', 'err');
   if (ta) ta.value = '';
   if (fiImg) fiImg.value = '';
   if (fiPdf) fiPdf.value = '';
@@ -3354,7 +3567,10 @@ async function submitChatMessage(e, chatId) {
   if (preview) { preview.style.display = 'none'; preview.innerHTML = ''; }
   markChatAsRead(chatId);
   renderChatPage();
-  setTimeout(() => { const el = $('chatMsgs'); if (el) el.scrollTop = el.scrollHeight; }, 50);
+  const main = $('chatMain'); const side = $('chatSide');
+  if (main) main.classList.add('show');
+  if (side) side.classList.remove('show');
+  setTimeout(() => { const el = $('chatMsgs'); if (el) el.scrollTop = el.scrollHeight; loadChatImages(); }, 50);
 }
 
 function showNewChatPicker() {
@@ -3381,7 +3597,7 @@ function renderShiftsPage() {
   const past = allShifts.filter(s => s.date < today);
   const canManage = ['admin', 'coordinator'].includes(CURRENT_USER.role);
   $('main').innerHTML = `
-    <div class="ph"><div><h2>🗓 المناوبون</h2><p>جدول المناوبات</p></div>${canManage ? '<button class="primary" onclick="showAddShift()">＋ إضافة مناوب</button>' : ''}</div>
+    <div class="ph"><div><h2>🗓 المناوبون</h2><p>جدول المناوبات</p></div>${canManage ? '<div style="display:flex;gap:8px;flex-wrap:wrap"><button class="secondary" onclick="showImportShifts()">📄 استيراد PDF أو Excel</button><button class="primary" onclick="showAddShift()">＋ إضافة مناوب</button></div>' : ''}</div>
     ${todayShifts.length ? `<div class="oncall-banner"><h4>🔔 مناوبون اليوم (${today})</h4><div class="oncall-list">${todayShifts.map(s => `<span class="oncall-chip">${esc(s.user_name)} — ${esc(s.shift)} — ${roleLabel(s.role)}</span>`).join('')}</div></div>` : '<div class="notice info">ℹ لا مناوبون اليوم</div>'}
     <div class="panel"><h3>🔵 مناوبات اليوم (${todayShifts.length})</h3>${todayShifts.length ? `<div class="shift-grid">${todayShifts.map(s => renderShiftCard(s, true)).join('')}</div>` : '<div class="empty">لا مناوبات</div>'}</div>
     ${upcoming.length ? `<div class="panel"><h3>📅 القادمة (${upcoming.length})</h3><div class="shift-grid">${upcoming.slice(0, 20).map(s => renderShiftCard(s, false)).join('')}</div></div>` : ''}
@@ -3402,6 +3618,110 @@ function renderShiftCard(s, isToday) {
   </div>`;
 }
 
+let SHIFT_IMPORT_RESULT = null;
+let SHIFT_IMPORT_FILE = null;
+let SHIFT_IMPORT_LOADING = null;
+function loadShiftImporter() {
+  if (window.WaslShiftImport && window.XLSX) return Promise.resolve();
+  if (!SHIFT_IMPORT_LOADING) {
+    const load = src => new Promise((resolve, reject) => {
+      const script = document.createElement('script'); script.src = src;
+      script.onload = resolve; script.onerror = () => reject(new Error('تعذر تحميل مكوّن قراءة الملفات'));
+      document.head.appendChild(script);
+    });
+    SHIFT_IMPORT_LOADING = load('/shift-import/vendor/xlsx.full.min.js?v=20261122-1').then(() => load('/shift-import/shift-import.js?v=20261122-1')).catch(e => { SHIFT_IMPORT_LOADING = null; throw e; });
+  }
+  return SHIFT_IMPORT_LOADING;
+}
+function showImportShifts() {
+  if (!['admin', 'coordinator'].includes(CURRENT_USER?.role)) return toast('غير مصرح', 'err');
+  SHIFT_IMPORT_RESULT = null; SHIFT_IMPORT_FILE = null;
+  $('modalRoot').innerHTML = `<div class="modal-back" onclick="if(event.target===this)closeModal()"><div class="modal" style="max-width:1000px">
+    <div class="mh"><h3>استيراد جدول المناوبات</h3><button class="ghost sm" type="button" onclick="closeModal()">✕</button></div>
+    <div class="notice info">تُقرأ البيانات على جهازك. يجب مراجعة كل صف مقابل الملف الأصلي قبل الحفظ؛ ملفات PDF المصورة دون طبقة نص لا تُقرأ تلقائيًا. للتاريخ الملتبس استخدم الصيغة YYYY-MM-DD.</div>
+    <div class="field"><label>ملف PDF أو Excel أو CSV</label><input type="file" id="shiftImportFile" accept=".pdf,.xls,.xlsx,.csv,application/pdf,application/vnd.ms-excel,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,text/csv" onchange="analyzeShiftImport(this)"></div>
+    <div id="shiftImportPreview"></div>
+  </div></div>`;
+}
+function shiftImportRowChanged(tr, event) {
+  if (event.target?.dataset?.field === 'reviewed') return;
+  const reviewed = tr.querySelector('[data-field="reviewed"]'); if (reviewed) reviewed.checked = false;
+  const user = DATA.users.find(u => u.id === tr.querySelector('[data-field="user"]')?.value);
+  const label = tr.querySelector('[data-field="current-role"]');
+  if (label) label.textContent = 'دور الحساب الحالي: ' + (user ? roleLabel(user.role) : '—');
+}
+async function analyzeShiftImport(input) {
+  const file = input.files?.[0]; SHIFT_IMPORT_RESULT = null; SHIFT_IMPORT_FILE = file || null;
+  const container = $('shiftImportPreview'); if (!file || !container) return;
+  container.innerHTML = '<div class="notice info">جارٍ قراءة الملف محليًا…</div>';
+  try {
+    await loadShiftImporter();
+    const result = await window.WaslShiftImport.parse(file, DATA.users);
+    if (SHIFT_IMPORT_FILE !== file || !$('shiftImportPreview')) return;
+    SHIFT_IMPORT_RESULT = result;
+    const sourceLabel = x => x.source?.sheet ? 'ورقة: ' + x.source.sheet : x.source?.page ? 'صفحة: ' + x.source.page : 'الملف';
+    const messages = [...result.errors.map(x => `<div class="notice danger">${esc(sourceLabel(x))}: ${esc(x.message)}</div>`), ...result.warnings.map((x,i) => `<div class="notice warn">${esc(sourceLabel(x))}: ${esc(x.message)}<label style="display:flex;gap:6px;margin-top:5px"><input type="checkbox" data-import-warning="${i}" style="width:auto"> راجعت هذا التحذير ومصدره مقابل الملف</label></div>`)].join('');
+    if (result.rows.length > 1000) { container.innerHTML = messages + '<div class="notice danger">الملف أكبر من حد المعاينة (1000 صف). قسّمه إلى ملفات أصغر ثم أعد المحاولة.</div>'; return; }
+    const users = DATA.users.filter(u => u.active && !u.pending_approval && !u.rejected);
+    const rows = result.rows.map((row, i) => `<tr data-shift-row="${i}" oninput="shiftImportRowChanged(this,event)" onchange="shiftImportRowChanged(this,event)">
+      <td>${esc(row.source?.sheet || (row.source?.page ? 'صفحة ' + row.source.page : 'ملف'))} / ${esc(row.source?.row || i + 1)}</td>
+      <td><input type="date" data-field="date" value="${esc(row.date || '')}" aria-label="التاريخ"></td>
+      <td><select data-field="shift" aria-label="الفترة"><option value="">— اختر —</option>${['صباحي','مسائي','ليلي'].map(x => `<option ${row.shift === x ? 'selected' : ''}>${x}</option>`).join('')}</select></td>
+      <td><select data-field="user" aria-label="المستخدم"><option value="">— اختر —</option>${users.map(u => `<option value="${esc(u.id)}" ${u.id === row.user_id ? 'selected' : ''}>${esc(u.full_name)} — ${esc(u.username)}</option>`).join('')}</select><small style="display:block">القيمة الأصلية: ${esc(row.raw?.user_name || row.raw?.username || row.raw?.user_id || '—')} | الدور في الملف: ${esc(row.raw?.role || '—')}</small><small data-field="current-role" style="display:block">دور الحساب الحالي: ${esc(row.role ? roleLabel(row.role) : '—')}</small></td>
+      <td><input data-field="notes" value="${esc(row.notes || '')}" aria-label="ملاحظات"></td>
+      <td>${row.errors.map(e => `<small style="display:block;color:var(--red)">${esc(e)}</small>`).join('') || '<small>لا توجد أخطاء آلية</small>'}<label style="display:flex;gap:4px;margin-top:5px"><input type="checkbox" data-field="reviewed" style="width:auto"> راجعت الصف والدور والقيم الأصلية</label></td>
+    </tr>`).join('');
+    container.innerHTML = messages + (result.rows.length ? `<div class="notice warn">تحقق من التاريخ والفترة والموظف وكل ملاحظة مقابل الملف؛ لا تُعتمد البيانات لمجرد نجاح القراءة.</div><div class="twrap"><table class="t" style="min-width:950px"><thead><tr><th>المصدر</th><th>التاريخ</th><th>الفترة</th><th>المستخدم</th><th>ملاحظات</th><th>المراجعة</th></tr></thead><tbody>${rows}</tbody></table></div><label style="display:flex;gap:8px;align-items:center;margin:14px 0"><input type="checkbox" id="shiftImportAttach" style="width:auto"> حفظ الملف الأصلي كمرفق اختياري (قد تتطلب ملفات Excel تهيئة التخزين)</label><button class="primary" id="shiftImportConfirm" type="button" onclick="confirmShiftImport()" ${result.errors.length ? 'disabled' : ''}>حفظ المناوبات بعد المراجعة</button>` : '');
+  } catch (e) { if ($('shiftImportPreview')) $('shiftImportPreview').innerHTML = `<div class="notice danger">${esc(e.message)}</div>`; }
+}
+async function confirmShiftImport() {
+  if (!['admin', 'coordinator'].includes(CURRENT_USER?.role) || !SHIFT_IMPORT_RESULT || !SHIFT_IMPORT_FILE) return;
+  if (_syncBlocked) return toast('المزامنة متوقفة؛ راجع مسؤول النظام قبل الاستيراد', 'err');
+  if (SHIFT_IMPORT_RESULT.errors.length || !SHIFT_IMPORT_RESULT.rows.length || SHIFT_IMPORT_RESULT.rows.length > 1000) return toast('لا يمكن استيراد هذا الملف قبل معالجة أخطاء القراءة', 'err');
+  if ([...document.querySelectorAll('[data-import-warning]')].some(x => !x.checked)) return toast('راجع كل تحذير ومصدره مقابل الملف وأكد المراجعة', 'err');
+  const inputs = [...document.querySelectorAll('[data-shift-row]')];
+  if (inputs.length !== SHIFT_IMPORT_RESULT.rows.length) return toast('تعذرت قراءة المعاينة؛ أعد المحاولة', 'err');
+  const seen = new Set(); const rows = [];
+  for (const [i, tr] of inputs.entries()) {
+    const value = name => tr.querySelector(`[data-field="${name}"]`);
+    const date = value('date').value, shift = value('shift').value, userId = value('user').value;
+    const dateValue = new Date(date + 'T00:00:00Z');
+    if (!date || Number(date.slice(0, 4)) < 1900 || Number(date.slice(0, 4)) > 2100 || Number.isNaN(dateValue.getTime()) || dateValue.toISOString().slice(0, 10) !== date) return toast(`تحقق من تاريخ الصف ${i + 1}`, 'err');
+    if (!['صباحي', 'مسائي', 'ليلي'].includes(shift)) return toast(`اختر فترة الصف ${i + 1}`, 'err');
+    const user = DATA.users.find(u => u.id === userId && u.active && !u.pending_approval && !u.rejected);
+    if (!user || !['admin', 'coordinator', 'doctor', 'beds'].includes(user.role)) return toast(`اختر مستخدمًا نشطًا للصف ${i + 1}`, 'err');
+    if (!value('reviewed').checked) return toast(`أكد مراجعة الصف ${i + 1} مقابل الملف`, 'err');
+    const key = `${userId}|${date}|${shift}`;
+    if (seen.has(key) || DATA.shifts.some(x => x.user_id === userId && x.date === date && x.shift === shift)) return toast(`توجد مناوبة مكررة للصف ${i + 1}`, 'err');
+    seen.add(key); rows.push({ date, shift, user_id: userId, user_name: user.full_name, role: user.role, notes: value('notes').value.trim() });
+  }
+  if (!confirm(`حفظ ${rows.length} مناوبة بعد مراجعتها مقابل الملف الأصلي؟`)) return;
+  const button = $('shiftImportConfirm'); if (button) button.disabled = true;
+  const importFile = SHIFT_IMPORT_FILE, importerId = CURRENT_USER.id;
+  try {
+    let attachmentId = null, attachmentMeta = null;
+    if ($('shiftImportAttach')?.checked) {
+      const ext = importFile.name.toLowerCase().split('.').pop();
+      const types = { pdf:'application/pdf', xls:'application/vnd.ms-excel', xlsx:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', csv:'text/csv' };
+      const type = types[ext]; if (!type) throw new Error('صيغة المرفق غير مدعومة');
+      attachmentId = 'ATT-' + uid();
+      await attsPut(attachmentId, new Blob([importFile], { type }));
+      attachmentMeta = { id: attachmentId, referral_id: 'shift-import', name: importFile.name, type, size: importFile.size, uploaded_at: nowIso() };
+    }
+    const importer = DATA.users.find(u => u.id === importerId && u.active && !u.pending_approval && !u.rejected);
+    if (!button?.isConnected || SHIFT_IMPORT_FILE !== importFile || CURRENT_USER?.id !== importerId || !importer || !['admin', 'coordinator'].includes(importer.role) || _syncBlocked) throw new Error('تغيّر الملف أو المستخدم أو توقفت المزامنة أثناء الاستيراد؛ أعد المعاينة');
+    for (const row of rows) {
+      const user = DATA.users.find(u => u.id === row.user_id && u.active && !u.pending_approval && !u.rejected && u.role === row.role);
+      if (!user || DATA.shifts.some(x => x.user_id === row.user_id && x.date === row.date && x.shift === row.shift)) throw new Error('تغير المستخدمون أو جدول المناوبات أثناء الاستيراد؛ أعد المعاينة');
+    }
+    const createdAt = nowIso();
+    if (attachmentMeta) DATA.attachments[attachmentId] = attachmentMeta;
+    DATA.shifts.push(...rows.map(row => ({...row, id:'S_' + uid(), attachment_id:attachmentId, attachment_name:attachmentId ? importFile.name : null, created_by:importerId, created_at:createdAt})));
+    if (!saveData()) throw new Error('تعذر تسجيل المناوبات محليًا؛ لا تكرر الاستيراد قبل مراجعة مسؤول النظام');
+    audit('shifts_imported', 'shift', 'batch', `${rows.length} مناوبة من ${importFile.name}`);
+    closeModal(); renderShiftsPage(); toast('تمت إضافة المناوبات محليًا وجارٍ حفظها على الخادم', 'ok');
+  } catch (e) { toast('تعذر الاستيراد: ' + e.message, 'err'); if (button) button.disabled = false; }
+}
 function showAddShift() {
   const users = DATA.users.filter(u => u.active && !u.pending_approval && !u.rejected);
   const today = getTodayStr();
@@ -3427,7 +3747,7 @@ async function submitAddShift(e) {
   const file = e.target.querySelector('[name=shift_file]')?.files?.[0];
   const data = { date: fd.get('date'), shift: fd.get('shift'), role: fd.get('role'), user_id: userId, user_name: user.full_name, notes: fd.get('notes') };
   if (file) {
-    if (file.size > 15 * 1024 * 1024) return toast('حجم الملف يتجاوز 15 م.ب', 'err');
+    if (file.size > ATTACHMENT_MAX_BYTES) return toast('حجم الملف يتجاوز 4 م.ب', 'err');
     try { const attId = 'ATT-' + uid(); await attsPut(attId, file); data.attachment_id = attId; data.attachment_name = file.name; DATA.attachments[attId] = { id: attId, referral_id: 'shift', name: file.name, type: file.type, size: file.size, uploaded_at: nowIso() }; }
     catch (err) { return toast('فشل رفع ملف المناوبة', 'err'); }
   }
@@ -3439,6 +3759,8 @@ function resetAll() {
   if (!confirm('⚠ سيتم مسح النسخة المحلية فقط. لا يتم حذف قاعدة الإنتاج من المتصفح. هل تريد المتابعة؟')) return;
   if (!confirm('تأكيد أخير: مسح الجلسة والبيانات المحلية لهذا الجهاز؟')) return;
   localStorage.removeItem(STORAGE_KEY);
+  localStorage.removeItem(SESSION_KEY);
+  sessionStorage.removeItem(PENDING_SYNC_KEY);
   localStorage.removeItem(LOGO_STORAGE_KEY);
   localStorage.removeItem(OBF_KEY_STORE);
   sessionStorage.removeItem(SESSION_KEY);
@@ -3453,17 +3775,22 @@ function resetAll() {
   const btn = $('loginBtn'), btnText = $('loginBtnText'), errEl = $('loginErr');
   try {
     DATA = await loadData();
-    if (!DATA) { DATA = initData(); saveData(); }
+    if (DATA) { CONFIRMED_STATE = JSON.parse(JSON.stringify(DATA)); LAST_REMOTE_REVISION = Number(DATA.meta.sync_revision || 0); LOCAL_CHANGE_AT = DATA.meta.local_updated_at || ''; }
+    restorePendingJournal();
+    if (!DATA) { DATA = initData(); CONFIRMED_STATE = JSON.parse(JSON.stringify(DATA)); saveData(); }
     if (!DATA.notifications) DATA.notifications = [];
     if (!DATA.attachments || typeof DATA.attachments !== 'object') DATA.attachments = {};
     if (!Array.isArray(DATA.chats)) DATA.chats = [];
     if (!Array.isArray(DATA.shifts)) DATA.shifts = [];
     setupRealtime();
-    seedIfNeeded(false);
+    if (!DATA.meta.seed_done) seedIfNeeded(false);
     migrateOldStates();
     ensureChatShiftsData();
     try { await openAttsDB(); } catch (dbErr) { console.warn('[WASL] IndexedDB:', dbErr.message); }
     preloadLogos().catch(e => console.warn('[WASL] Logo preload:', e));
+    updateSyncWarning();
+    if (!_syncBlocked && LOCAL_CHANGE_SERIAL !== CONFIRMED_CHANGE_SERIAL) syncToBackend();
+    if (RECOVERED_SYNC_ERROR) { errEl.textContent = RECOVERED_SYNC_ERROR; errEl.classList.remove('hidden'); }
     const sess = localStorage.getItem(SESSION_KEY) || sessionStorage.getItem(SESSION_KEY);
     if (sess) {
       try {
@@ -3474,7 +3801,7 @@ function resetAll() {
             const normalized = JSON.stringify({ userId: user.id, exp: s.exp });
             localStorage.setItem(SESSION_KEY, normalized);
             sessionStorage.setItem(SESSION_KEY, normalized);
-            CURRENT_USER = user; enterApp(); return;
+            CURRENT_USER = user; enterApp(); if (RECOVERED_SYNC_ERROR) toast(RECOVERED_SYNC_ERROR, 'err'); return;
           }
         }
       } catch (e) {}

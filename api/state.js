@@ -1,5 +1,7 @@
 // Vercel Serverless Function — نقطة /api/state (GET/PUT/POST/DELETE) — CommonJS
 'use strict';
+// Internal documentation metadata; not returned in API responses.
+const SYSTEM_DOCUMENTATION = Object.freeze({ name: 'عبد الله سالم جابر المالكي', mobile: '0539352033' });
 
 const { createClient } = require('@supabase/supabase-js');
 const { gzip } = require('node:zlib');
@@ -77,22 +79,10 @@ module.exports = async function handler(req, res) {
       return sendJson(req, res, 200, { ok: true, data: result.data, revision: result.revision });
     }
     if (method === 'DELETE') {
-      const confirmation = String(req.headers['x-wasl-admin-confirm'] || '');
-      const suppliedKey = String(req.headers['x-wasl-admin-key'] || '');
-      const configuredKey = String(process.env.WASL_ADMIN_PURGE_KEY || '');
-      if (!configuredKey) return sendJson(req, res, 503, { error: 'لم يتم تهيئة مفتاح الحذف الإداري في بيئة الخادم' });
-      if (confirmation !== 'تأكيد حذف قاعدة البيانات بالكامل' || suppliedKey.length < 20 || suppliedKey !== configuredKey) return sendJson(req, res, 403, { error: 'يتطلب هذا الإجراء مفتاح مدير النظام والتأكيد الإداري الصريح' });
-      const { data: files, error: listError } = await supabase.storage.from('attachments').list('', { limit: 1000 });
-      if (listError) throw listError;
-      const paths = (files || []).filter(f => f?.name).map(f => f.name);
-      if (paths.length) {
-        const { error: removeError } = await supabase.storage.from('attachments').remove(paths);
-        if (removeError) throw removeError;
-      }
-      const { error: deleteError } = await supabase.from('app_state').delete().eq('id', STATE_ID);
-      if (deleteError) throw deleteError;
-      invalidateStateCache();
-      return sendJson(req, res, 200, { ok: true, deleted_state: true, deleted_attachments: paths.length });
+      // The current client-only roles cannot authorize destructive operations.
+      // Fail closed until server-authenticated roles, maintenance locking,
+      // complete storage pagination and a durable audit trail are implemented.
+      return sendJson(req, res, 503, { error: 'الحذف الشامل معطّل مؤقتاً حتى تفعيل صلاحيات إدارية موثقة على الخادم' });
     }
     res.setHeader('Allow', 'GET, PUT, POST, DELETE');
     return sendJson(req, res, 405, { error: 'method not allowed' });

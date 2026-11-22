@@ -10,9 +10,6 @@ const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SER
 const BUCKET = 'attachments';
 const MAX_BYTES = 15 * 1024 * 1024;
 
-// Keep raw request bytes; JSON parsing would corrupt PDFs and images.
-module.exports.config = { api: { bodyParser: false } };
-
 function idFrom(req) {
   const raw = req.query?.id || req.headers['x-attachment-id'];
   return String(raw || '').replace(/[^A-Za-z0-9_-]/g, '').slice(0, 120);
@@ -71,3 +68,6 @@ module.exports = async function handler(req, res) {
     return send(res, error.statusCode || 500, JSON.stringify({ error: 'فشل تخزين المرفق' }));
   }
 };
+
+// Assign the config after the handler so it is not overwritten by module.exports.
+module.exports.config = { api: { bodyParser: false } };

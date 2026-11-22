@@ -3,13 +3,28 @@
     {
       "source": "/",
       "headers": [
-        { "key": "Cache-Control", "value": "no-store, max-age=0, must-revalidate" }
+        {
+          "key": "Cache-Control",
+          "value": "no-store, max-age=0, must-revalidate"
+        }
       ]
     },
     {
       "source": "/api/(.*)",
       "headers": [
-        { "key": "Cache-Control", "value": "no-store, max-age=0, must-revalidate" }
+        {
+          "key": "Cache-Control",
+          "value": "no-store, max-age=0, must-revalidate"
+        }
+      ]
+    },
+    {
+      "source": "/shift-import/(.*)",
+      "headers": [
+        {
+          "key": "Cache-Control",
+          "value": "no-store, max-age=0, must-revalidate"
+        }
       ]
     }
   ]
