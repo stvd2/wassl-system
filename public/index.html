@@ -318,7 +318,7 @@ let LIST_TYPE = '';
 let LIST_DEPT = '';
 
 function canPrint() {
-  return CURRENT_USER?.role === 'coordinator';
+  return ['coordinator', 'admin'].includes(CURRENT_USER?.role);
 }
 
 async function refreshFromRealtime() {
@@ -2080,7 +2080,7 @@ function tableHTML(list) {
     const st = STATES[r.status] || { label: r.status, cls: '' };
     const actor = st.actor && st.actor !== '—' ? `<span class="actor-badge">${roleLabel(st.actor)}</span>` : '';
     const isNew = CURRENT_USER.role === 'doctor' && !r.doctor_viewed_at && ['awaiting_doctor','resubmitted','consulting','awaiting_final'].includes(r.status);
-    return `<tr${isNew ? ' style="background:#e8f4f8;border-right:3px solid var(--teal)"' : ''}>
+    return `<tr onclick="openDetail('${esc(r.id)}')" title="فتح تفاصيل الإحالة" style="cursor:pointer;${isNew ? 'background:#e8f4f8;border-right:3px solid var(--teal);' : ''}>
       <td><b style="color:var(--navy)">${esc(refNoOf(r))}</b>${isNew ? ' <span class="pill p-new">🆕</span>' : ''}<div style="font-size:11px;color:var(--muted);margin-top:3px">${esc(r.patient_name)}</div><div style="font-size:10.5px;color:var(--muted)">MRN: ${esc(r.mrn)}</div></td>
       <td>${typeChip(r)}</td>
       <td>${r.target_specialty ? '🎯 ' + esc(r.target_specialty) : esc(r.specialty || '—')}</td>
@@ -2088,7 +2088,7 @@ function tableHTML(list) {
       <td><span class="pill ${st.cls}">${st.label}</span>${actor}</td>
       <td>${r.bed_number ? `<b>${esc(r.bed_number)}</b>` : '—'}</td>
       <td style="font-size:11px;color:var(--muted);white-space:nowrap">${fmtDate(r.updated_at || r.created_at)}</td>
-      <td><button class="secondary sm" onclick="openDetail('${esc(r.id)}')">👁 عرض</button>${referralActionButtons(r)}</td>
+      <td><button class="secondary sm" onclick="event.stopPropagation();openDetail('${esc(r.id)}')">👁 عرض</button><span onclick="event.stopPropagation()">${referralActionButtons(r)}</span></td>
     </tr>`;
   }).join('');
   return `<div class="twrap"><table class="t"><thead><tr>
@@ -2495,7 +2495,7 @@ function onDoctorActionChange(sel) {
     const meta = REFERRAL_TYPE_META[priority];
     wrapper.innerHTML = `
       ${meta ? `<div class="field full"><div class="notice info" style="margin:0">✓ القبول كـ: <b>${meta.admission}</b>${needWard ? ' — اختر القسم' : ''}</div></div>` : ''}
-      ${priority === 'طارئ' ? `<div class="field full"><label>قبول الطوارئ؟ *</label><select name="emergency_accept" required onchange="onEmergencyDecisionChange(this)"><option value="">— اختر —</option><option value="نعم">نعم — قبول للتنويم</option><option value="لا">لا — رفض الطوارئ</option></select></div><div id="emergency-decision-fields" class="field full"></div>` : (needWard ? `<div class="field full"><label>القسم / نوع السرير *</label><input name="ward_type" list="bed-type-options" required placeholder="اكتب نوع السرير أو اختره"><datalist id="bed-type-options">${BED_TYPE_OPTIONS.map(o => `<option value="${esc(o)}">`).join('')}</datalist></div>` : `<input type="hidden" name="ward_type" value="">`)}
+      ${priority === 'طارئ' ? `<div class="field full"><label>قبول الطوارئ؟ *</label><select name="emergency_accept" required onchange="onEmergencyDecisionChange(this)"><option value="">— اختر —</option><option value="نعم">نعم — قبول للتنويم</option><option value="لا">لا — رفض الطوارئ</option></select></div><div id="emergency-decision-fields" class="field full"></div>` : (needWard ? `<div class="field full"><label>${priority === 'تنويم عادي' ? 'قسم التنويم / نوع السرير العادي *' : 'القسم / نوع السرير *'}</label><input name="ward_type" list="bed-type-options" required placeholder="${priority === 'تنويم عادي' ? 'قسم تنويم / سرير تنويم عادي' : 'اكتب نوع السرير أو اختره'}"><datalist id="bed-type-options">${BED_TYPE_OPTIONS.map(o => `<option value="${esc(o)}">`).join('')}</datalist></div>` : `<input type="hidden" name="ward_type" value="">`)}
       <div class="field full"><label>الجوال المسجل للطبيب</label><input type="tel" value="${esc(mobileVal)}" readonly aria-readonly="true"><input type="hidden" name="doctor_mobile" value="${esc(mobileVal)}"></div>
       <div class="field full"><label>ردك *</label><textarea name="notes" required style="min-height:110px"></textarea></div>`;
   } else if (v === 'doctor_rejected') {
@@ -2708,12 +2708,18 @@ function renderNotifications() {
   $('content').innerHTML = `<div class="panel" style="padding:0;overflow:hidden">
     <div style="padding:16px 20px;border-bottom:1px solid var(--line);background:#fafcfc;display:flex;justify-content:space-between;align-items:center">
       <h3 style="margin:0">آخر ${myNotifs.length} إشعار</h3>
-      <button class="ghost sm" onclick="markAllRead()">تعليم الكل كمقروء</button>
+      <div style="display:flex;gap:6px;flex-wrap:wrap"><button class="ghost sm" onclick="markAllRead()">تعليم الكل كمقروء</button><button class="danger xs" onclick="deleteAllNotifications()">🗑 حذف الكل</button></div>
     </div>
     ${items}
   </div>`;
 }
 
+function deleteAllNotifications() {
+  if (!CURRENT_USER) return;
+  if (!confirm('حذف جميع إشعارات حسابك نهائيًا؟')) return;
+  DATA.notifications = DATA.notifications.filter(n => n.user_id ? n.user_id !== CURRENT_USER.id : !(n.role === CURRENT_USER.role || n.role === 'all'));
+  saveData(); toast('✓ تم حذف الإشعارات', 'ok'); renderNotifications(); buildNav();
+}
 function markAllRead() {
   DATA.notifications.forEach(n => {
     if (n.user_id === CURRENT_USER.id) n.read = true;
@@ -2825,7 +2831,7 @@ function renderDbMonitor() {
 // الطباعة
 // ═══════════════════════════════════════════════════════════════════
 async function openPrint(id) {
-  if (!canPrint()) return toast('الطباعة متاحة للمنسق فقط', 'err');
+  if (!canPrint()) return toast('الطباعة متاحة لمنسق الإحالات ومدير النظام فقط', 'err');
   const r = DATA.referrals.find(x => x.id === id);
   if (!r) return toast('غير موجود', 'err');
   const w = window.open('', '_blank');
@@ -3191,9 +3197,14 @@ function renderAudit() {
   if (CURRENT_USER.role !== 'admin') return;
   const logs = DATA.audit.slice(0, 200);
   const rows = logs.map(l => `<tr><td style="font-size:11.5px">${fmtDate(l.ts)}</td><td>${esc(l.user)}</td><td>${esc(l.role)}</td><td><span class="pill">${esc(l.action)}</span></td><td style="font-size:11.5px">${esc(l.entity_id || '—')}</td></tr>`).join('');
-  $('content').innerHTML = `<div class="panel"><h3>سجل التدقيق (${logs.length})</h3><div class="twrap"><table class="t" style="min-width:700px"><thead><tr><th>التاريخ</th><th>المستخدم</th><th>الدور</th><th>العملية</th><th>الكيان</th></tr></thead><tbody>${rows}</tbody></table></div></div>`;
+  $('content').innerHTML = `<div class="panel"><div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap"><h3 style="margin:0">سجل التدقيق (${logs.length})</h3><button class="danger xs" onclick="deleteAllAudit()">🗑 حذف الكل</button></div><div class="twrap"><table class="t" style="min-width:700px"><thead><tr><th>التاريخ</th><th>المستخدم</th><th>الدور</th><th>العملية</th><th>الكيان</th></tr></thead><tbody>${rows}</tbody></table></div></div>`;
 }
 
+function deleteAllAudit() {
+  if (CURRENT_USER?.role !== 'admin') return toast('متاح لمدير النظام فقط', 'err');
+  if (!confirm('حذف جميع سجلات التدقيق نهائيًا؟')) return;
+  DATA.audit = []; DATA.meta.auditSeq = 0; saveData(); toast('✓ تم حذف سجل التدقيق', 'ok'); renderAudit();
+}
 // ═══════════════════════════════════════════════════════════════════
 // الدردشة عرض
 // ═══════════════════════════════════════════════════════════════════
