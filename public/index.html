@@ -98,7 +98,7 @@ table.t tr:hover td{background:#fafcfc}
 .tl-item{position:relative;padding:12px 0 16px 0;border-bottom:1px dashed var(--line)}
 .tl-item:last-child{border-bottom:0}
 .tl-item::before{content:'';position:absolute;right:-26px;top:16px;width:12px;height:12px;border-radius:50%;background:var(--teal);border:2px solid #fff;box-shadow:0 0 0 2px var(--teal)}
-.tl-item.cancelled::before,.tl-item.rejected::before{background:var(--red);box-shadow:0 0 0 2px var(--red)}
+.tl-item.rejected::before{background:var(--red);box-shadow:0 0 0 2px var(--red)}
 .tl-item.completed::before{background:var(--green);box-shadow:0 0 0 2px var(--green)}
 .tl-header{display:flex;justify-content:space-between;align-items:center;gap:10px;margin-bottom:6px;flex-wrap:wrap}
 .tl-action{font-weight:700;color:var(--navy);font-size:13.5px}
@@ -731,23 +731,21 @@ const STATES = {
   consulting:        { label: 'بانتظار ردود الأقسام المستشارة',      cls: 'p-purple', color: '#6d28d9', stage: 1, actor: 'doctor' },
   awaiting_final:    { label: 'بانتظار القرار النهائي للقسم',        cls: 'p-acc',    color: '#0b7a63', stage: 2, actor: 'doctor' },
   completed:         { label: 'مكتملة ومغلقة',                       cls: 'p-done',   color: '#16734e', stage: 7, actor: '—', terminal: true },
-  cancelled:         { label: 'ملغاة',                               cls: 'p-r',      color: '#b43f3f', stage: 0, actor: '—', terminal: true }
 };
 
 const TRANSITIONS = {
   awaiting_doctor:   ['doctor_accepted', 'doctor_rejected', 'info_requested', 'consultation_done'],
   info_requested:    ['resubmitted'],
   resubmitted:       ['doctor_accepted', 'doctor_rejected', 'info_requested', 'consultation_done'],
-  consultation_done: ['completed', 'cancelled'],
-  doctor_accepted:   ['awaiting_bed', 'completed', 'cancelled'],
-  doctor_rejected:   ['cancelled'],
-  awaiting_bed:      ['bed_approved', 'bed_rejected', 'cancelled'],
-  bed_approved:      ['completed', 'cancelled'],
-  bed_rejected:      ['awaiting_bed', 'cancelled'],
-  consulting:        ['cancelled'],
-  awaiting_final:    ['doctor_accepted', 'doctor_rejected', 'info_requested', 'cancelled'],
+  consultation_done: ['completed'],
+  doctor_accepted:   ['awaiting_bed', 'completed'],
+  doctor_rejected:   [],
+  awaiting_bed:      ['bed_approved', 'bed_rejected'],
+  bed_approved:      ['completed'],
+  bed_rejected:      ['awaiting_bed'],
+  consulting:        [],
+  awaiting_final:    ['doctor_accepted', 'doctor_rejected', 'info_requested'],
   completed:         [],
-  cancelled:         []
 };
 
 const ACTION_PERMS = {
@@ -945,7 +943,6 @@ function migrateOldStates() {
     'supplement_ready':   'resubmitted',
     'accepted':           'doctor_accepted',
     'rejected':           'doctor_rejected',
-    'withdrawn':          'cancelled'
   };
   for (const r of (DATA.referrals || [])) {
     if (STATE_MAP[r.status]) { r.status = STATE_MAP[r.status]; changed = true; }
@@ -1192,16 +1189,6 @@ function transitionReferral(id, to, payload = {}) {
     }
     if (isConsultation(r)) notifyRole('doctor', r.id, '✓ تم إغلاق الاستشارة', CURRENT_USER.full_name);
     else { notifyRole('coordinator', r.id, 'الإحالة مغلقة نهائياً', CURRENT_USER.full_name); if (r.assigned_doctor_id) notifyRole('doctor', r.id, 'الإحالة مغلقة', CURRENT_USER.full_name); }
-  }
-  if (to === 'cancelled') {
-    r.cancelled_at = nowIso();
-    r.cancelled_by = CURRENT_USER.id;
-    r.cancel_reason = payload.reason || '';
-    if (r.bed_id) {
-      const bed = DATA.beds.find(b => b.id === r.bed_id);
-      if (bed) Object.assign(bed, { available: true, current_patient: null, current_referral: null, updated_at: nowIso() });
-    }
-    notifyRole('coordinator', r.id, `إلغاء الإحالة — السبب: ${payload.reason || ''}`, CURRENT_USER.full_name);
   }
 
   if (!r.timeline) r.timeline = [];
@@ -2214,7 +2201,7 @@ function openDetail(id) {
 
   const timeline = (r.timeline || []).slice().reverse().map(t => {
     const tst = STATES[t.to] || {};
-    const cls = t.to === 'completed' ? 'completed' : ['cancelled','doctor_rejected','bed_rejected'].includes(t.to) ? 'rejected' : '';
+    const cls = t.to === 'completed' ? 'completed' : ['doctor_rejected','bed_rejected'].includes(t.to) ? 'rejected' : '';
     return `<div class="tl-item ${cls}">
       <div class="tl-header"><div class="tl-action">${esc(t.action)}</div><div class="tl-time">${fmtDate(t.ts)}</div></div>
       <div class="tl-user">${esc(t.user)} — ${roleLabel(t.role)}</div>
@@ -2344,7 +2331,6 @@ function getAvailableActions(r) {
   const forms = [];
 
   for (const to of allowed) {
-    if (to === 'cancelled') continue;
     if (isConsul && to === 'doctor_accepted') continue;
     if (!isConsul && to === 'consultation_done') continue;
     if (to === 'awaiting_bed' && skipBeds) continue;
@@ -2355,7 +2341,7 @@ function getAvailableActions(r) {
     if (perm && perm.roles.includes(CURRENT_USER.role)) forms.push({ to, ...perm });
   }
 
-  const printableStates = ['doctor_rejected', 'info_requested', 'bed_approved', 'bed_rejected', 'completed', 'cancelled', 'consultation_done'];
+  const printableStates = ['doctor_rejected', 'info_requested', 'bed_approved', 'bed_rejected', 'completed', 'consultation_done'];
   if (from === 'doctor_accepted' && skipBeds) printableStates.push('doctor_accepted');
   if (printableStates.includes(from) && canPrint()) {
     if (from === 'consultation_done') forms.unshift({ to: 'print', label: '🖨️ طباعة نموذج الاستشارة', btn: 'primary', icon: '🖨' });
@@ -2788,7 +2774,6 @@ async function openPrint(id) {
   else if (isConsultation(r)) tpl = 'consultation';
   else if (r.priority === 'عيادات' || r.admission_type === 'قبول عيادات') tpl = 'clinic';
   else if (isDirectER(r)) tpl = 'emergency';
-  else if (r.status === 'cancelled' && !r.admission_type) tpl = 'reject';
 
   const creatorUser = DATA.users.find(u => u.id === r.created_by);
   const doctorUser  = r.assigned_doctor_id ? DATA.users.find(u => u.id === r.assigned_doctor_id) : null;
@@ -2817,7 +2802,7 @@ async function openPrint(id) {
     bedDept: r.bed_ward || (isDirectER(r) ? 'طوارئ / Emergency' : '—'),
     bedAdmissionDate: dateStr(r.bed_approved_at || r.completed_at || r.doctor_responded_at),
     bedDuration: r.bed_duration || '', bedAdmissionNotes: r.bed_notes || r.closure_notes || '—',
-    rejectionReason: r.rejection_reason || r.bed_rejection_reason || r.cancel_reason || '—',
+    rejectionReason: r.rejection_reason || r.bed_rejection_reason || '—',
     missingList: r.needed_info || '—',
     refEmployeeName: creatorUser ? creatorUser.full_name : '—', refEmployeeId: creatorUser ? creatorUser.username : '—',
     bedEmployeeName: bedUser ? bedUser.full_name : '—', bedEmployeeId: bedUser ? bedUser.username : '—'
