@@ -5,6 +5,7 @@ const { createClient } = require('@supabase/supabase-js');
 const { promisify } = require('node:util');
 const { pipeline } = require('node:stream');
 const streamPipeline = promisify(pipeline);
+const { requireUser } = require('./_auth');
 
 const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE_KEY, { auth: { persistSession: false } });
 const BUCKET = 'attachments';
@@ -40,6 +41,8 @@ module.exports = async function handler(req, res) {
   if (!id) return send(res, 400, JSON.stringify({ error: 'معرّف المرفق غير صالح' }));
   const path = `${id}`;
   try {
+    const auth = await requireUser(req, { roles: ['admin', 'coordinator', 'doctor', 'beds'] });
+    if (!auth.ok) return send(res, auth.status, JSON.stringify({ error: auth.error }));
     if (req.method === 'PUT' || req.method === 'POST') {
       const contentType = String(req.headers['content-type'] || 'application/octet-stream');
       if (!['application/pdf', 'image/jpeg', 'image/png', 'image/webp', 'application/vnd.ms-excel', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', 'text/csv'].includes(contentType.split(';')[0])) {

@@ -303,8 +303,15 @@ const API_IMPORT = API_BASE + '/api/import';
 const FREE_QUOTA_KB = 512000;
 // 4 MiB stays below Vercel Functions' 4.5 MB request-body limit.
 const ATTACHMENT_MAX_BYTES = 4 * 1024 * 1024;
-const SUPABASE_PUBLIC_URL = 'https://rtnzxmedlmymtgyzgmhp.supabase.co';
-const SUPABASE_PUBLISHABLE_KEY = 'sb_publishable_mROaMe2BCRBDcwkxExZgRQ_kMTpL2E1';
+let SUPABASE_CLIENT_URL = '';
+let SUPABASE_CLIENT_KEY = '';
+async function loadClientConfig() {
+  const response = await fetch(API_BASE + '/api/config', { cache: 'no-store' });
+  if (!response.ok) throw new Error('إعدادات الخدمة غير متاحة');
+  const config = await response.json();
+  SUPABASE_CLIENT_URL = String(config.supabaseUrl || '');
+  SUPABASE_CLIENT_KEY = String(config.supabaseClientKey || '');
+}
 let DATA = null;
 let CURRENT_USER = null;
 let PAGE = 'dashboard';
@@ -369,9 +376,9 @@ async function refreshFromRealtime() {
 function setupRealtime() {
   if (!REALTIME_POLL_TIMER) REALTIME_POLL_TIMER = setInterval(() => refreshFromRealtime(), 8000);
   window.addEventListener('focus', () => refreshFromRealtime());
-  if (REALTIME_CHANNEL || !window.supabase?.createClient) return;
+  if (REALTIME_CHANNEL || !window.supabase?.createClient || !SUPABASE_CLIENT_URL || !SUPABASE_CLIENT_KEY) return;
   try {
-    const client = window.supabase.createClient(SUPABASE_PUBLIC_URL, SUPABASE_PUBLISHABLE_KEY, {
+    const client = window.supabase.createClient(SUPABASE_CLIENT_URL, SUPABASE_CLIENT_KEY, {
       auth: { persistSession: false, autoRefreshToken: false }
     });
     REALTIME_CHANNEL = client.channel('wasl-app-state')
@@ -461,13 +468,6 @@ const WARD_OPTIONS = {
 };
 const BED_TYPE_OPTIONS = ['طوارئ', 'سرير عادي', 'سرير عزل', 'سرير عناية مركزة'];
 
-const OBF_KEY_STORE = 'wasl_obf_key_v1';
-// بيانات توثيق النظام محفوظة في ملف الخادم وليست ضمن واجهة المتصفح.
-const DEFAULT_MOBILES = {
-  'admin': '0515468605', '1010': '0512345678', '1313': '0512345680',
-  '1040': '0512345701', '1515': '0512345702', '1616': '0512345703', '1717': '0512345704',
-  '1818': '0512345705', '1919': '0512345706', '2020': '0512345707', '2121': '0512345708', '2222': '0512345709'
-};
 
 const $ = id => document.getElementById(id);
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
@@ -485,36 +485,6 @@ const typeChip = r => {
   return m.label === '—' ? '—' : `<span class="type-chip ${m.chip}">${m.icon} ${esc(m.label)}</span>`;
 };
 
-// مفتاح تشفير/تعمية يُنشأ عشوائياً لكل متصفح (لا يوجد مفتاح ثابت في الكود)
-function getObfKey() {
-  let key = null;
-  try { key = localStorage.getItem(OBF_KEY_STORE); } catch (e) {}
-  if (!key) {
-    key = randomHex(64);
-    try { localStorage.setItem(OBF_KEY_STORE, key); } catch (e) {}
-  }
-  return key;
-}
-
-function obfuscate(text) {
-  try {
-    const key = getObfKey();
-    const encoded = new TextEncoder().encode(text);
-    let result = '';
-    for (let i = 0; i < encoded.length; i++) result += String.fromCharCode(encoded[i] ^ key.charCodeAt(i % key.length));
-    return btoa(result);
-  } catch(e) { return ''; }
-}
-function deobfuscate(encoded) {
-  try {
-    if (!encoded) return '';
-    const key = getObfKey();
-    const raw = atob(encoded);
-    const bytes = new Uint8Array(raw.length);
-    for (let i = 0; i < raw.length; i++) bytes[i] = raw.charCodeAt(i) ^ key.charCodeAt(i % key.length);
-    return new TextDecoder().decode(bytes);
-  } catch(e) { return ''; }
-}
 
 // ═══════════════════════════════════════════════════════════════════
 // مسار الإحالة متعدد الأقسام
@@ -524,10 +494,10 @@ const targetSpecialtyOf = r => (r.target_specialty || r.specialty || '—');
 // هل هذه الإحالة واردة لطبيب معيّن (حسب قسمه)؟
 function isReferralInDoctorInbox(r) {
   const dept = CURRENT_USER.department;
-  if (r.status === 'consulting') {
-    return !!dept && (r.consult_departments || []).includes(dept) && !(r.department_responses || []).some(x => x.department === dept);
+  if (r.status === 'awaiting_doctor') {
+    return !!dept && (r.departments || []).includes(dept) && !(r.department_responses || []).some(x => x.department === dept);
   }
-  if (r.status === 'awaiting_final') return !!dept && r.target_specialty === dept;
+  if (r.status === 'awaiting_doctor') return !!dept && r.target_specialty === dept;
   if (r.status === 'awaiting_doctor' || r.status === 'resubmitted') {
     if (!r.target_specialty) return true; // توافق قديم: إحالات قديمة بدون قسم نهائي تظهر لكل الأطباء
     return !!dept && r.target_specialty === dept;
@@ -546,13 +516,13 @@ function recommendPill(rec) {
   return 'p-warn';
 }
 
-// رد قسم استشاري (مرحلة consulting) — وعند اكتمال كل الردود تنتقل تلقائياً للقسم النهائي
+// رد قسم استشاري (مرحلة awaiting_doctor) — وعند اكتمال كل الردود تنتقل تلقائياً للقسم النهائي
 function submitDepartmentResponse(id, recommendation, notes) {
   const r = DATA.referrals.find(x => x.id === id);
   if (!r) return { ok: false, error: 'الإحالة غير موجودة' };
-  if (r.status !== 'consulting') return { ok: false, error: 'الإحالة ليست في مرحلة استشارة الأقسام' };
+  if (r.status !== 'awaiting_doctor') return { ok: false, error: 'الإحالة ليست في مرحلة استشارة الأقسام' };
   const dept = CURRENT_USER.department;
-  if (!dept || !(r.consult_departments || []).includes(dept)) return { ok: false, error: 'قسمك ليس ضمن الأقسام المطلوب استشارتها' };
+  if (!dept || !(r.departments || []).includes(dept)) return { ok: false, error: 'قسمك ليس ضمن الأقسام المطلوب استشارتها' };
   if ((r.department_responses || []).some(x => x.department === dept)) return { ok: false, error: 'قسمك سبق أن أرسل رأيه' };
   if (!notes || !notes.trim()) return { ok: false, error: 'الرأي / الملاحظات إلزامية' };
 
@@ -563,13 +533,13 @@ function submitDepartmentResponse(id, recommendation, notes) {
   });
   r.updated_at = nowIso();
   if (!r.timeline) r.timeline = [];
-  r.timeline.push({ ts: nowIso(), from: 'consulting', to: 'consulting', user: CURRENT_USER.full_name, role: CURRENT_USER.role, user_id: CURRENT_USER.id, action: `رد قسم ${dept}`, details: { recommendation: recommendation || 'محايد', notes: notes.trim() } });
+  r.timeline.push({ ts: nowIso(), from: 'awaiting_doctor', to: 'awaiting_doctor', user: CURRENT_USER.full_name, role: CURRENT_USER.role, user_id: CURRENT_USER.id, action: `رد قسم ${dept}`, details: { recommendation: recommendation || 'محايد', notes: notes.trim() } });
 
-  const pending = (r.consult_departments || []).filter(d => !r.department_responses.some(x => x.department === d));
+  const pending = (r.departments || []).filter(d => !r.department_responses.some(x => x.department === d));
   if (!pending.length) {
-    r.status = 'awaiting_final';
+    r.status = 'awaiting_doctor';
     r.updated_at = nowIso();
-    r.timeline.push({ ts: nowIso(), from: 'consulting', to: 'awaiting_final', user: 'النظام', role: '—', user_id: null, action: 'اكتملت ردود الأقسام — أحيلت للقسم النهائي', details: {} });
+    r.timeline.push({ ts: nowIso(), from: 'awaiting_doctor', to: 'awaiting_doctor', user: 'النظام', role: '—', user_id: null, action: 'اكتملت ردود الأقسام — أحيلت للقسم النهائي', details: {} });
     notifyRole('coordinator', r.id, 'اكتملت ردود الأقسام — الإحالة بانتظار قرار القسم النهائي', CURRENT_USER.full_name);
     const finalDoctors = DATA.users.filter(u => u.role === 'doctor' && u.department === r.target_specialty && u.active);
     finalDoctors.forEach(u => notifyUser(u.id, r.id, '🩺 إحالة جديدة بانتظار قرارك النهائي (القبول أو الرفض)'));
@@ -756,8 +726,6 @@ const STATES = {
   awaiting_bed:      { label: 'بانتظار رد إدارة الأسرة',             cls: 'p-bed',    color: '#6c4ab0', stage: 3, actor: 'beds' },
   bed_approved:      { label: 'قبول الأسرة — بانتظار الإغلاق',      cls: 'p-acc',    color: '#0b7a63', stage: 4, actor: 'admin' },
   bed_rejected:      { label: 'رفض الأسرة — بانتظار المدير',        cls: 'p-r',      color: '#b43f3f', stage: 3, actor: 'admin' },
-  consulting:        { label: 'بانتظار ردود الأقسام المستشارة',      cls: 'p-purple', color: '#6d28d9', stage: 1, actor: 'doctor' },
-  awaiting_final:    { label: 'بانتظار القرار النهائي للقسم',        cls: 'p-acc',    color: '#0b7a63', stage: 2, actor: 'doctor' },
   completed:         { label: 'مكتملة ومغلقة',                       cls: 'p-done',   color: '#16734e', stage: 7, actor: '—', terminal: true },
 };
 
@@ -771,8 +739,6 @@ const TRANSITIONS = {
   awaiting_bed:      ['bed_approved', 'bed_rejected'],
   bed_approved:      ['completed'],
   bed_rejected:      ['awaiting_bed'],
-  consulting:        [],
-  awaiting_final:    ['doctor_accepted', 'doctor_rejected', 'info_requested', 'consultation_done'],
   completed:         [],
 };
 
@@ -794,10 +760,10 @@ const ACTION_PERMS = {
   'awaiting_bed→bed_rejected':         { roles: ['beds', 'admin'], label: 'رفض طلب السرير', btn: 'danger', icon: '✕' },
   'bed_approved→completed':            { roles: ['coordinator', 'admin'], label: 'إغلاق الإحالة', btn: 'success', icon: '✓' },
   'bed_rejected→awaiting_bed':         { roles: ['coordinator', 'admin'], label: 'إعادة الإرسال لإدارة الأسرة', btn: 'warn', icon: '↻' },
-  'awaiting_final→doctor_accepted':    { roles: ['doctor'], label: 'قبول نهائي', btn: 'success', icon: '✓' },
-  'awaiting_final→doctor_rejected':    { roles: ['doctor'], label: 'رفض نهائي', btn: 'danger', icon: '✕' },
-  'awaiting_final→info_requested':     { roles: ['doctor'], label: 'طلب استكمال', btn: 'warn', icon: '📝' },
-  'awaiting_final→consultation_done':  { roles: ['doctor'], label: 'إرسال تقرير الاستشارة', btn: 'primary', icon: '📋' }
+  'awaiting_doctor→doctor_accepted':    { roles: ['doctor'], label: 'قبول نهائي', btn: 'success', icon: '✓' },
+  'awaiting_doctor→doctor_rejected':    { roles: ['doctor'], label: 'رفض نهائي', btn: 'danger', icon: '✕' },
+  'awaiting_doctor→info_requested':     { roles: ['doctor'], label: 'طلب استكمال', btn: 'warn', icon: '📝' },
+  'awaiting_doctor→consultation_done':  { roles: ['doctor'], label: 'إرسال تقرير الاستشارة', btn: 'primary', icon: '📋' }
 };
 
 // ═══════════════════════════════════════════════════════════════════
@@ -844,7 +810,7 @@ let _syncRetryTimer = null;
 function updateSyncWarning() {
   const warning = $('syncWarning'); if (!warning) return;
   if (_syncBlocked) {
-    warning.textContent = 'المزامنة متوقفة بسبب تعارض أو تعذر حفظ نسخة محلية. لا تُعد تنفيذ العمليات أو تغلق التبويب؛ تواصل مع مسؤول النظام.';
+    warning.innerHTML = 'المزامنة متوقفة مؤقتًا بسبب تعارض. <button class="secondary xs" onclick="retryBlockedSync()">إعادة المزامنة</button>';
     warning.classList.remove('hidden');
   } else if (LOCAL_CHANGE_SERIAL !== CONFIRMED_CHANGE_SERIAL) {
     warning.textContent = 'توجد تعديلات لم يؤكد الخادم حفظها بعد؛ اترك التبويب مفتوحًا حتى تختفي هذه الرسالة.';
@@ -852,6 +818,11 @@ function updateSyncWarning() {
   } else warning.classList.add('hidden');
 }
 function blockSync() { _syncBlocked = true; updateSyncWarning(); }
+async function retryBlockedSync() {
+  _syncBlocked = false; RECOVERED_SYNC_ERROR = '';
+  updateSyncWarning();
+  try { await syncNow(); } catch (e) { blockSync(); toast('تعذرت إعادة المزامنة: ' + e.message, 'err'); }
+}
 async function pushStateSnapshot() {
   if (_syncBlocked || !DATA?.meta) return;
   const snapshot = JSON.parse(JSON.stringify(DATA));
@@ -1100,7 +1071,7 @@ async function syncNow() {
 }
 function initData() {
   return {
-    meta: { version: 'v6', sync_revision: 0, created_at: nowIso(), seed_done: false, seq: 0, auditSeq: 0, notifSeq: 0 },
+    meta: { version: 'v6', sync_revision: 0, created_at: nowIso(), seq: 0, auditSeq: 0, notifSeq: 0 },
     users: [], referrals: [], beds: [], audit: [], attachments: {}, notifications: [], chats: [], shifts: []
   };
 }
@@ -1133,8 +1104,7 @@ function migrateOldStates() {
     if (u.failed_attempts === undefined) { u.failed_attempts = 0; changed = true; }
     if (u.locked_until === undefined) { u.locked_until = null; changed = true; }
     if (u.password_changed_at === undefined) { u.password_changed_at = null; changed = true; }
-    if (u.plain_password === undefined) { u.plain_password = ''; changed = true; }
-    if (u.mobile === undefined) { u.mobile = DEFAULT_MOBILES[u.username] || ''; changed = true; }
+    if (u.mobile === undefined) { u.mobile = ''; changed = true; }
     if (u.pending_approval === undefined) { u.pending_approval = false; changed = true; }
     if (u.tracking_no === undefined) { u.tracking_no = null; changed = true; }
     if (u.rejected === undefined) { u.rejected = false; changed = true; }
@@ -1152,46 +1122,6 @@ function migrateOldStates() {
   }
   if (!Array.isArray(DATA.chats)) { DATA.chats = []; changed = true; }
   if (!Array.isArray(DATA.shifts)) { DATA.shifts = []; changed = true; }
-  if (changed) saveData();
-}
-
-function seedIfNeeded(force) {
-  const defs = [
-    { username: 'admin', password: 'Admin@2026', full_name: 'مدير النظام', role: 'admin' },
-    { username: '1010',  password: '2526885',   full_name: 'منسق الإحالات', role: 'coordinator' },
-    { username: '1313',  password: '2526885',   full_name: 'إدارة الأسرة', role: 'beds' },
-    { username: '1040',  password: '2526885',   full_name: 'طبيب الباطنة', role: 'doctor', department: 'الباطنة' },
-    { username: '1515',  password: '2526885',   full_name: 'طبيب العناية المركزة', role: 'doctor', department: 'العناية المركزة' },
-    { username: '1616',  password: '2526885',   full_name: 'طبيب العظام', role: 'doctor', department: 'العظام' },
-    { username: '1717',  password: '2526885',   full_name: 'طبيب القلب', role: 'doctor', department: 'القلب' },
-    { username: '1818',  password: '2526885',   full_name: 'طبيب العيادات', role: 'doctor', department: 'العيادات' },
-    { username: '1919',  password: '2526885',   full_name: 'طبيب الجراحة العامة', role: 'doctor', department: 'الجراحة العامة' },
-    { username: '2020',  password: '2526885',   full_name: 'طبيب جراحة المخ والأعصاب', role: 'doctor', department: 'جراحة المخ والأعصاب' },
-    { username: '2121',  password: '2526885',   full_name: 'طبيب الصدرية', role: 'doctor', department: 'الصدرية' },
-    { username: '2222',  password: '2526885',   full_name: 'طبيب الكلى', role: 'doctor', department: 'الكلى' }
-  ];
-  let changed = false;
-  for (const d of defs) {
-    const ex = DATA.users.find(x => x.username === d.username);
-    if (ex && !force) continue;
-    const salt = randomHex(32), hash = hashPassword(d.password, salt);
-    if (ex) Object.assign(ex, { salt, hash, active: true, plain_password: obfuscate(d.password), mobile: ex.mobile || DEFAULT_MOBILES[d.username] || '', department: d.department || ex.department || null });
-    else DATA.users.push({
-      id: uid(), username: d.username, salt, hash, full_name: d.full_name, role: d.role,
-      department: d.department || null,
-      active: true, created_at: nowIso(), must_change_password: d.username !== 'admin', password_history: [],
-      password_changed_at: null, failed_attempts: 0, locked_until: null,
-      plain_password: obfuscate(d.password), mobile: DEFAULT_MOBILES[d.username] || '',
-      pending_approval: false, tracking_no: null, rejected: false, rejected_at: null, rejection_reason: null
-    });
-    changed = true;
-  }
-  if (!DATA.beds.length) {
-    const beds = [['G-001','عادي','باطنة'],['G-002','عادي','باطنة'],['G-003','عادي','باطنة'],['G-101','جناح عام','جراحة'],['G-102','جناح عام','جراحة'],['ICU-01','عناية مركزة','ICU'],['ICU-02','عناية مركزة','ICU'],['CCU-01','عناية قلبية','CCU'],['ISO-01','عزل','عزل']];
-    for (const [num, type, ward] of beds) DATA.beds.push({ id: uid(), number: num, type, ward, available: true, current_patient: null, current_referral: null, updated_at: nowIso() });
-    changed = true;
-  }
-  DATA.meta.seed_done = true;
   if (changed) saveData();
 }
 
@@ -1255,7 +1185,7 @@ function transitionReferral(id, to, payload = {}) {
   if (!perm.roles.includes(CURRENT_USER.role)) return { ok: false, error: `هذا الإجراء متاح فقط لـ: ${perm.roles.map(roleLabel).join('، ')}` };
   if (isConsultation(r) && to === 'doctor_accepted') return { ok: false, error: 'استخدم نموذج تقرير الاستشارة الطبية' };
   if (!isConsultation(r) && to === 'consultation_done') return { ok: false, error: 'هذا الإجراء خاص بالاستشارة الطبية' };
-  if (CURRENT_USER.role === 'doctor' && ['awaiting_doctor', 'resubmitted', 'awaiting_final'].includes(from) && targetSpecialtyOf(r) && CURRENT_USER.department !== targetSpecialtyOf(r)) {
+  if (CURRENT_USER.role === 'doctor' && ['awaiting_doctor', 'resubmitted', 'awaiting_doctor'].includes(from) && targetSpecialtyOf(r) && CURRENT_USER.department !== targetSpecialtyOf(r)) {
     return { ok: false, error: `القرار خاص بقسم ${targetSpecialtyOf(r)}` };
   }
 
@@ -1271,7 +1201,7 @@ function transitionReferral(id, to, payload = {}) {
     r.admission_type = meta ? meta.admission : 'قبول تنويم';
     r.emergency_admission = r.priority === 'طارئ' && payload.emergency_accept === 'نعم';
     r.ward_type = r.emergency_admission ? 'طوارئ' : ((payload.ward_type && payload.ward_type.trim()) || '');
-    r.doctor_mobile = CURRENT_USER.mobile || DEFAULT_MOBILES[CURRENT_USER.username] || r.doctor_mobile || '';
+    r.doctor_mobile = CURRENT_USER.mobile || r.doctor_mobile || '';
     if (r.emergency_admission) r.admission_type = 'قبول للتنويم';
     notifyRole('coordinator', r.id, r.emergency_admission ? '🚨 قبول طوارئ مباشر — جاهز لطباعة المنسق' : 'الطبيب قَبِل الإحالة — بانتظار توجيهك', CURRENT_USER.full_name);
   }
@@ -1282,7 +1212,7 @@ function transitionReferral(id, to, payload = {}) {
     r.doctor_notes = payload.notes || '';
     r.doctor_responded_at = nowIso();
     r.assigned_doctor_id = CURRENT_USER.id; r.assigned_doctor_name = CURRENT_USER.full_name;
-    r.doctor_mobile = CURRENT_USER.mobile || DEFAULT_MOBILES[CURRENT_USER.username] || r.doctor_mobile || '';
+    r.doctor_mobile = CURRENT_USER.mobile || r.doctor_mobile || '';
     notifyRole('coordinator', r.id, `الطبيب رفض الإحالة — السبب: ${payload.reason}`, CURRENT_USER.full_name);
   }
   if (to === 'info_requested') {
@@ -1302,7 +1232,7 @@ function transitionReferral(id, to, payload = {}) {
     r.consultation_followup = payload.consultation_followup || 'لا';
     r.consultation_notes = payload.consultation_notes || '';
     r.consultation_at = nowIso();
-    r.doctor_mobile = CURRENT_USER.mobile || DEFAULT_MOBILES[CURRENT_USER.username] || r.doctor_mobile || '';
+    r.doctor_mobile = CURRENT_USER.mobile || r.doctor_mobile || '';
     r.doctor_decision = 'consultation';
     r.doctor_responded_at = nowIso();
     r.assigned_doctor_id = CURRENT_USER.id; r.assigned_doctor_name = CURRENT_USER.full_name;
@@ -1566,7 +1496,6 @@ function doRegister(e) {
   const trackNo = generateTrackingNo();
   const newUser = {
     id: uid(), username: employeeNumber, salt, hash: hashPassword('PendingRegistration@000', salt),
-    plain_password: '', mobile, full_name: fullName, role: 'pending', active: false,
     pending_approval: true, tracking_no: trackNo, created_at: nowIso(),
     must_change_password: true, password_history: [], password_changed_at: null,
     failed_attempts: 0, locked_until: null, rejected: false, rejected_at: null, rejection_reason: null, department: null
@@ -1648,7 +1577,6 @@ function completeApproval(e, id) {
   if (d.role === 'doctor' && !d.department) { errEl.textContent = '❌ القسم مطلوب للأطباء'; errEl.classList.remove('hidden'); return; }
   const salt = randomHex(32);
   u.salt = salt; u.hash = hashPassword(d.temp_password, salt);
-  u.plain_password = obfuscate(d.temp_password);
   u.role = d.role;
   u.department = d.role === 'doctor' ? d.department : null;
   u.active = true; u.pending_approval = false; u.rejected = false;
@@ -1688,195 +1616,55 @@ function deleteRejectedUser(id) {
   renderUsers();
 }
 
-function doLogin() {
-  const u = $('loginUser').value.trim();
-  const p = $('loginPass').value;
+async function doLogin() {
+  const userName = $('loginUser').value.trim();
+  const password = $('loginPass').value;
   const errEl = $('loginErr');
-  errEl.classList.add('hidden');
-  if (!u || !p) { errEl.textContent = 'أكمل البيانات'; errEl.classList.remove('hidden'); return; }
-  if (!DATA || !Array.isArray(DATA.users)) {
-    errEl.textContent = '❌ لم تكتمل تهيئة النظام، أعد تحميل الصفحة';
-    errEl.classList.remove('hidden');
-    return;
-  }
-  $('loginBtn').disabled = true; $('loginBtnText').textContent = 'جاري التحقق...';
+  if (!userName || !password) { errEl.textContent = 'أدخل اسم المستخدم وكلمة المرور'; errEl.classList.remove('hidden'); return; }
+  $('loginBtn').disabled = true; $('loginBtnText').textContent = 'جارٍ التحقق...'; errEl.classList.add('hidden');
   try {
-    let user = DATA.users.find(x => x.username === u);
-    if (!user) throw new Error(`الحساب "${u}" غير موجود`);
-    if (user.rejected) throw new Error('تم رفض التسجيل');
-    if (user.pending_approval) throw new Error('بانتظار موافقة المدير');
-    if (!user.active) throw new Error('الحساب معطّل');
-    if (user.locked_until && new Date(user.locked_until) > new Date()) {
-      const mins = Math.ceil((new Date(user.locked_until) - new Date()) / 60000);
-      throw new Error(`الحساب مقفل ${mins} دقيقة`);
-    }
-    if (!verifyPassword(p, user.salt, user.hash)) {
-      user.failed_attempts = (user.failed_attempts || 0) + 1;
-      if (user.failed_attempts >= 5) {
-        user.locked_until = new Date(Date.now() + 15 * 60000).toISOString();
-        user.failed_attempts = 0; saveData();
-        audit('account_locked', 'user', user.id, '');
-        throw new Error('تم قفل الحساب 15 دقيقة');
-      }
-      saveData();
-      throw new Error(`كلمة المرور خاطئة — متبقٍ ${5 - user.failed_attempts}`);
-    }
-    user.failed_attempts = 0; user.locked_until = null; saveData();
-    CURRENT_USER = user;
-    user.last_seen_at = nowIso();
-    if (user.role === 'doctor') notifyRole('all', null, `الطبيب ${user.full_name} متصل الآن`, user.full_name);
-    const session = JSON.stringify({ userId: user.id, exp: Date.now() + 8 * 3600e3 });
-    localStorage.setItem(SESSION_KEY, session);
-    sessionStorage.setItem(SESSION_KEY, session);
-    audit('login_success', 'user', user.id, '');
-    enterApp();
+    const res = await fetch(API_BASE + '/api/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, credentials: 'same-origin', body: JSON.stringify({ username: userName, password }) });
+    const body = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(body.error || 'بيانات الدخول غير صحيحة');
+    CURRENT_USER = body.user;
+    await finishAuthenticatedBoot();
   } catch (e) {
-    errEl.textContent = '❌ ' + e.message;
-    errEl.classList.remove('hidden');
+    errEl.textContent = '❌ ' + e.message; errEl.classList.remove('hidden');
     $('loginBtn').disabled = false; $('loginBtnText').textContent = 'دخول';
   }
 }
 
-function doLogout() {
-  if (CURRENT_USER) audit('logout', 'user', CURRENT_USER.id, '');
-  localStorage.removeItem(SESSION_KEY);
-  localStorage.removeItem(PAGE_SESSION_KEY);
-  sessionStorage.removeItem(SESSION_KEY);
-  clearInterval(PRESENCE_TIMER); PRESENCE_TIMER = null; CURRENT_USER = null; CURRENT_CHAT = null;
-  $('app').classList.add('hidden');
-  $('loginScreen').classList.remove('hidden');
-  $('loginPass').value = '';
-  $('loginBtn').disabled = false; $('loginBtnText').textContent = 'دخول';
-  $('modalRoot').innerHTML = '';
+async function finishAuthenticatedBoot() {
+  DATA = await loadData();
+  if (!DATA) DATA = initData();
+  CONFIRMED_STATE = JSON.parse(JSON.stringify(DATA));
+  LAST_REMOTE_REVISION = Number(DATA.meta?.sync_revision || 0);
+  LOCAL_CHANGE_AT = DATA.meta?.local_updated_at || '';
+  restorePendingJournal();
+  if (!DATA.notifications) DATA.notifications = [];
+  if (!DATA.attachments || typeof DATA.attachments !== 'object') DATA.attachments = {};
+  if (!Array.isArray(DATA.chats)) DATA.chats = [];
+  if (!Array.isArray(DATA.shifts)) DATA.shifts = [];
+  migrateOldStates(); ensureChatShiftsData(); setupRealtime(); updateSyncWarning();
+  try { await openAttsDB(); } catch (e) { console.warn('[WASL] IndexedDB:', e.message); }
+  preloadLogos().catch(e => console.warn('[WASL] Logo preload:', e));
+  if (LOCAL_CHANGE_SERIAL !== CONFIRMED_CHANGE_SERIAL) syncToBackend();
+  enterApp();
+}
+
+async function doLogout() {
+  clearInterval(PRESENCE_TIMER); PRESENCE_TIMER = null;
+  try { await fetch(API_BASE + '/api/login', { method: 'DELETE', credentials: 'same-origin' }); } catch (e) {}
+  for (const key of [STORAGE_KEY, SESSION_KEY, PAGE_SESSION_KEY, LOGO_STORAGE_KEY]) localStorage.removeItem(key);
+  for (const key of [PENDING_SYNC_KEY, SESSION_KEY]) sessionStorage.removeItem(key);
+  try { indexedDB.deleteDatabase('wasl_attachments_v1'); } catch (e) {}
+  DATA = null; CONFIRMED_STATE = null; CURRENT_USER = null; CURRENT_CHAT = null;
+  $('app').classList.add('hidden'); $('loginScreen').classList.remove('hidden'); $('loginPass').value = '';
+  $('loginBtn').disabled = false; $('loginBtnText').textContent = 'دخول'; $('modalRoot').innerHTML = '';
 }
 
 function forgotPassword() {
-  $('modalRoot').innerHTML = `
-    <div class="modal-back" onclick="if(event.target===this)closeModal()"><div class="modal" style="max-width:560px">
-      <div class="mh"><h3>🔐 استعادة كلمة المرور</h3><button class="ghost sm" onclick="closeModal()">✕</button></div>
-      <div style="display:flex;gap:8px;margin-bottom:18px">
-        <button class="secondary" id="tab-remember" onclick="switchForgotTab('remember')" style="flex:1">🔑 أتذكرها</button>
-        <button class="ghost" id="tab-forgot" onclick="switchForgotTab('forgot')" style="flex:1">📱 نسيتها</button>
-      </div>
-      <div id="forgotTabContent"></div>
-    </div></div>`;
-  switchForgotTab('remember');
-}
-
-function switchForgotTab(tab) {
-  const tR = $('tab-remember'), tF = $('tab-forgot');
-  if (!tR || !tF) return;
-  tR.className = tab === 'remember' ? 'secondary' : 'ghost';
-  tF.className = tab === 'forgot' ? 'secondary' : 'ghost';
-  tR.style.flex = '1'; tF.style.flex = '1';
-  if (tab === 'remember') {
-    $('forgotTabContent').innerHTML = `
-      <div id="forgotErr1" class="notice danger hidden"></div>
-      <form onsubmit="doForgotWithOld(event)" autocomplete="off">
-        <div class="field"><label>اسم المستخدم *</label><input name="username" required></div>
-        <div class="field"><label>كلمة المرور الحالية *</label><input name="old_password" type="password" required></div>
-        <div class="field"><label>كلمة المرور الجديدة *</label><input name="new_password" type="password" required minlength="8" oninput="updateStrengthForgot(this.value)"><div class="pw-bar"><div id="strengthFillForgot" class="pw-bar-fill"></div></div><small id="strengthTextForgot" class="pw-hint">—</small></div>
-        <div class="field"><label>تأكيد الجديدة *</label><input name="confirm_password" type="password" required minlength="8"></div>
-        <button class="primary" type="submit" style="width:100%;margin-top:8px">✓ تعيين</button>
-      </form>`;
-  } else {
-    $('forgotTabContent').innerHTML = `
-      <div id="forgotErr2" class="notice danger hidden"></div>
-      <form onsubmit="doForgotWithMobile(event)" autocomplete="off">
-        <div class="field"><label>اسم المستخدم *</label><input name="username" required></div>
-        <div class="field"><label>الجوال المسجل *</label><input name="mobile" type="tel" required placeholder="05xxxxxxxx"></div>
-        <button class="primary" type="submit" style="width:100%;margin-top:8px">🔍 تحقق</button>
-      </form>`;
-  }
-}
-
-function updateStrengthForgot(val) {
-  const m = strengthMeta(passwordStrength(val));
-  const fill = $('strengthFillForgot'), txt = $('strengthTextForgot');
-  if (!fill || !txt) return;
-  fill.style.width = val ? m.width : '0';
-  fill.style.background = m.color;
-  txt.textContent = val ? `القوة: ${m.label}` : '—';
-  txt.style.color = m.color;
-}
-
-function doForgotWithOld(e) {
-  e.preventDefault();
-  const fd = new FormData(e.target);
-  const username = (fd.get('username') || '').trim();
-  const oldPass = fd.get('old_password');
-  const newPass = fd.get('new_password');
-  const confirm = fd.get('confirm_password');
-  const errEl = $('forgotErr1');
-  errEl.classList.add('hidden');
-  const showErr = msg => { errEl.textContent = '❌ ' + msg; errEl.classList.remove('hidden'); };
-  const user = DATA.users.find(x => x.username === username);
-  if (!user) return showErr('اسم المستخدم غير موجود');
-  if (user.pending_approval) return showErr('بانتظار الموافقة');
-  if (user.rejected) return showErr('مرفوض');
-  if (!user.active) return showErr('معطّل');
-  if (!verifyPassword(oldPass, user.salt, user.hash)) return showErr('كلمة المرور الحالية خاطئة');
-  if (newPass !== confirm) return showErr('غير متطابقتين');
-  if (newPass === oldPass) return showErr('يجب أن تختلف');
-  const policyErrors = validatePasswordPolicy(newPass, user.username);
-  if (policyErrors.length) return showErr(policyErrors.join(' • '));
-  if (!user.password_history) user.password_history = [];
-  user.password_history.unshift({ salt: user.salt, hash: user.hash, changed_at: nowIso() });
-  if (user.password_history.length > 3) user.password_history.length = 3;
-  const newSalt = randomHex(32);
-  user.salt = newSalt; user.hash = hashPassword(newPass, newSalt);
-  user.plain_password = obfuscate(newPass);
-  user.must_change_password = false;
-  user.password_changed_at = nowIso();
-  saveData(); audit('password_recovered_with_old', 'user', user.id, '');
-  closeModal(); toast('✓ تم تعيين كلمة المرور', 'ok');
-}
-
-function doForgotWithMobile(e) {
-  e.preventDefault();
-  const fd = new FormData(e.target);
-  const username = (fd.get('username') || '').trim();
-  const mobile = (fd.get('mobile') || '').trim();
-  const errEl = $('forgotErr2');
-  errEl.classList.add('hidden');
-  const showErr = msg => { errEl.textContent = '❌ ' + msg; errEl.classList.remove('hidden'); };
-  const user = DATA.users.find(x => x.username === username);
-  if (!user) return showErr('غير موجود');
-  if (!user.active) return showErr('معطّل');
-  if (!user.mobile) return showErr('لا جوال مسجل');
-  if (mobile.replace(/[\s-]/g,'') !== String(user.mobile).replace(/[\s-]/g,'')) return showErr('الجوال غير مطابق');
-  const recovered = deobfuscate(user.plain_password);
-  $('forgotTabContent').innerHTML = `
-    <div class="notice success">✓ تم التحقق</div>
-    ${recovered ? `<div style="margin-bottom:14px"><label style="font-size:12px;color:#435560;font-weight:700">كلمة المرور الحالية</label><div class="recover-box">${esc(recovered)}</div></div>` : '<div class="notice warn">لا يمكن استرجاعها</div>'}
-    <div id="forgotErr3" class="notice danger hidden"></div>
-    <form onsubmit="doSetNewPassAfterMobile(event, '${esc(user.id)}')" autocomplete="off">
-      <div class="field"><label>كلمة مرور جديدة *</label><input name="new_password" type="password" required minlength="8"></div>
-      <div class="field"><label>تأكيد *</label><input name="confirm_password" type="password" required minlength="8"></div>
-      <button class="primary" type="submit" style="width:100%">💾 تعيين</button>
-    </form>`;
-}
-
-function doSetNewPassAfterMobile(e, userId) {
-  e.preventDefault();
-  const user = DATA.users.find(x => x.id === userId);
-  if (!user) return;
-  const fd = new FormData(e.target);
-  const newPass = fd.get('new_password');
-  const confirm = fd.get('confirm_password');
-  const errEl = $('forgotErr3');
-  errEl.classList.add('hidden');
-  const showErr = msg => { errEl.textContent = '❌ ' + msg; errEl.classList.remove('hidden'); };
-  if (newPass !== confirm) return showErr('غير متطابقتين');
-  const policyErrors = validatePasswordPolicy(newPass, user.username);
-  if (policyErrors.length) return showErr(policyErrors.join(' • '));
-  const newSalt = randomHex(32);
-  user.salt = newSalt;
-  user.hash = hashPassword(newPass, newSalt);
-  user.plain_password = obfuscate(newPass);
-  user.password_changed_at = nowIso();
-  saveData(); audit('password_recovered_with_mobile', 'user', user.id, '');
-  closeModal(); toast('✓ تم تعيين كلمة المرور', 'ok');
+  $('modalRoot').innerHTML = `<div class="modal-back" onclick="if(event.target===this)closeModal()"><div class="modal"><div class="mh"><h3>🔐 استعادة كلمة المرور</h3><button class="ghost sm" onclick="closeModal()">✕</button></div><div class="notice info">تُرسل إعادة التعيين عبر Supabase Auth إلى البريد المسجل للحساب. لا يمكن للنظام عرض كلمة المرور الحالية أو استعادتها.</div><button class="primary" style="width:100%" onclick="closeModal()">حسنًا</button></div></div>`;
 }
 
 function enterApp() {
@@ -1894,83 +1682,9 @@ function enterApp() {
 }
 
 function showChangePassword(force = false) {
-  $('modalRoot').innerHTML = `
-    <div class="modal-back" ${force ? '' : 'onclick="if(event.target===this)closeModal()"'}>
-      <div class="modal" style="max-width:520px">
-        <div class="mh"><h3>🔑 تغيير كلمة المرور</h3>${force ? '' : '<button class="ghost sm" onclick="closeModal()">✕</button>'}</div>
-        ${force ? '<div class="notice danger">⚠ يجب تغيير كلمة المرور</div>' : ''}
-        <div id="changePassErr" class="notice danger hidden"></div>
-        <form onsubmit="changePassword(event, ${force})">
-          <div class="field"><label>الحالية *</label><input name="current_password" type="password" required></div>
-          <div class="field"><label>الجديدة *</label><input name="new_password" type="password" required minlength="8" oninput="updateStrength(this.value)"><div class="pw-bar"><div id="strengthFill" class="pw-bar-fill"></div></div><small id="strengthText" class="pw-hint">—</small></div>
-          <div class="field"><label>تأكيد *</label><input name="confirm_password" type="password" required minlength="8"></div>
-          <div style="margin-top:16px;display:flex;gap:8px"><button class="primary" type="submit" style="flex:1">💾 حفظ</button>${force ? '<button class="ghost" type="button" onclick="doLogout()">خروج</button>' : '<button class="ghost" type="button" onclick="closeModal()">إلغاء</button>'}</div>
-        </form>
-      </div>
-    </div>`;
+  $('modalRoot').innerHTML = `<div class="modal-back" ${force ? '' : 'onclick="if(event.target===this)closeModal()"'}><div class="modal"><div class="mh"><h3>🔑 تغيير كلمة المرور</h3>${force ? '' : '<button class="ghost sm" onclick="closeModal()">✕</button>'}</div><div class="notice info">تغيير كلمة المرور يتم عبر Supabase Auth ولا تُخزّن كلمة المرور في حالة التطبيق.</div>${force ? '<button class="ghost" onclick="doLogout()">خروج</button>' : '<button class="primary" onclick="closeModal()">إغلاق</button>'}</div></div>`;
 }
-function updateStrength(val) {
-  const m = strengthMeta(passwordStrength(val));
-  const fill = $('strengthFill'), txt = $('strengthText');
-  if (!fill || !txt) return;
-  fill.style.width = val ? m.width : '0';
-  fill.style.background = m.color;
-  txt.textContent = val ? `القوة: ${m.label}` : '—';
-  txt.style.color = m.color;
-}
-function changePassword(e, force) {
-  e.preventDefault();
-  const fd = new FormData(e.target);
-  const current = fd.get('current_password');
-  const newPass = fd.get('new_password');
-  const confirm = fd.get('confirm_password');
-  const errEl = $('changePassErr');
-  errEl.classList.add('hidden');
-  const showErr = msg => { errEl.textContent = '❌ ' + msg; errEl.classList.remove('hidden'); };
-  if (!verifyPassword(current, CURRENT_USER.salt, CURRENT_USER.hash)) return showErr('الحالية خاطئة');
-  if (newPass !== confirm) return showErr('غير متطابقتين');
-  if (newPass === current) return showErr('يجب أن تختلف');
-  const policyErrors = validatePasswordPolicy(newPass, CURRENT_USER.username);
-  if (policyErrors.length) return showErr(policyErrors.join(' • '));
-  const newSalt = randomHex(32);
-  CURRENT_USER.salt = newSalt;
-  CURRENT_USER.hash = hashPassword(newPass, newSalt);
-  CURRENT_USER.plain_password = obfuscate(newPass);
-  CURRENT_USER.must_change_password = false;
-  CURRENT_USER.password_changed_at = nowIso();
-  if (!saveData()) return showErr('فشل الحفظ');
-  audit('password_changed', 'user', CURRENT_USER.id, '');
-  toast('✓ تم', 'ok');
-  closeModal();
-  if (force) {
-    const r = CURRENT_USER.role;
-    if (r === 'doctor') showPage('doctor_inbox');
-    else if (r === 'beds') showPage('bed_requests');
-    else showPage('dashboard');
-  }
-}
-function resetUserPassword(id) {
-  if (CURRENT_USER?.role !== 'admin') return toast('غير مصرح', 'err');
-  const u = DATA.users.find(x => x.id === id);
-  if (!u) return;
-  const temp = prompt(`كلمة مؤقتة لـ "${u.username}":`, 'Temp@' + Math.floor(1000 + Math.random() * 9000));
-  if (!temp) return;
-  const errors = validatePasswordPolicy(temp, u.username);
-  if (errors.length) return toast('❌ ' + errors.join(' • '), 'err');
-  const salt = randomHex(32);
-  u.salt = salt; u.hash = hashPassword(temp, salt);
-  u.plain_password = obfuscate(temp);
-  u.must_change_password = true;
-  u.password_history = [];
-  u.failed_attempts = 0; u.locked_until = null;
-  u.password_changed_at = nowIso();
-  saveData(); audit('password_reset_by_admin', 'user', id, u.username);
-  $('modalRoot').innerHTML = `<div class="modal-back" onclick="if(event.target===this)closeModal()"><div class="modal" style="max-width:480px">
-    <div class="mh"><h3>✓ إعادة التعيين</h3><button class="ghost sm" onclick="closeModal()">✕</button></div>
-    <div class="dgrid" style="grid-template-columns:1fr 1fr"><div class="d"><small>المستخدم</small><strong>${esc(u.username)}</strong></div><div class="d"><small>كلمة المرور</small><strong>${esc(temp)}</strong></div></div>
-    <button class="primary" onclick="navigator.clipboard.writeText('User: ${esc(u.username)}\\nPass: ${esc(temp)}').then(()=>toast('تم النسخ','ok'))" style="width:100%">📋 نسخ</button>
-  </div></div>`;
-}
+function resetUserPassword() { toast('إعادة التعيين متاحة عبر لوحة Supabase Auth فقط', 'warn'); }
 
 // ═══════════════════════════════════════════════════════════════════
 // التنقل
@@ -2126,8 +1840,8 @@ function renderDashboard() {
 
   const cards = [
     { label: 'نشطة', val: active.length, filter: 'outgoing' },
-    { label: 'بانتظار ردود الأقسام', val: byStatus.consulting, filter: 'outgoing' },
-    { label: 'بانتظار القرار النهائي', val: byStatus.awaiting_final, filter: 'outgoing' },
+    { label: 'بانتظار ردود الأقسام', val: byStatus.awaiting_doctor, filter: 'outgoing' },
+    { label: 'بانتظار القرار النهائي', val: byStatus.awaiting_doctor, filter: 'outgoing' },
     { label: '📋 استشارات جاهزة', val: byStatus.consultation_done, filter: 'consultation_ready' },
     { label: 'قبول الطبيب', val: byStatus.doctor_accepted, filter: 'forward_consultant' },
     { label: 'استكمال مطلوب', val: byStatus.info_requested, filter: 'need_supplement' },
@@ -2249,7 +1963,7 @@ function tableHTML(list) {
   const rows = list.map(r => {
     const st = STATES[r.status] || { label: r.status, cls: '' };
     const actor = st.actor && st.actor !== '—' ? `<span class="actor-badge">${roleLabel(st.actor)}</span>` : '';
-    const isNew = CURRENT_USER.role === 'doctor' && !r.doctor_viewed_at && ['awaiting_doctor','resubmitted','consulting','awaiting_final'].includes(r.status);
+    const isNew = CURRENT_USER.role === 'doctor' && !r.doctor_viewed_at && ['awaiting_doctor','resubmitted','awaiting_doctor','awaiting_doctor'].includes(r.status);
     return `<tr onclick="openDetail('${esc(r.id)}')" title="فتح تفاصيل الإحالة" style="cursor:pointer;${isNew ? 'background:#e8f4f8;border-right:3px solid var(--teal);' : ''}">
       <td><b style="color:var(--navy)">${esc(refNoOf(r))}</b>${isNew ? ' <span class="pill p-new">🆕</span>' : ''}<div style="font-size:11px;color:var(--muted);margin-top:3px">${esc(r.patient_name)}</div><div style="font-size:10.5px;color:var(--muted)">MRN: ${esc(r.mrn)}</div></td>
       <td>${typeChip(r)}</td>
@@ -2274,7 +1988,7 @@ function syncConsultOptions() {
   const consult = $('consultDeptsSel');
   if (!target || !consult) return;
   const tval = target.value.trim();
-  consult.querySelectorAll('input[name=\"consult_departments\"]').forEach(input => {
+  consult.querySelectorAll('input[name=\"departments\"]').forEach(input => {
     const disabled = !!tval && input.value === tval;
     input.disabled = disabled;
     if (disabled) input.checked = false;
@@ -2294,12 +2008,11 @@ function renderCreate() {
       <div class="field"><label>المستشفى المُحيل *</label><input name="from_hospital" required value="مستشفى الملك فيصل بمكة"></div>
       <div class="field"><label>المستشفى المحال إليه *</label><input name="to_hospital" required></div>
       <div class="field"><label>القسم النهائي (المحطة الأخيرة للقرار) *</label>
-        <input name="target_specialty" id="targetSpecialtySel" list="department-options" required placeholder="اكتب القسم أو اختره" oninput="syncConsultOptions()">
-        <datalist id="department-options">${DEPARTMENTS.map(d => `<option value="${esc(d)}">`).join('')}</datalist>
+        <select name="target_specialty" id="targetSpecialtySel" required onchange="syncConsultOptions()"><option value="">— اختر القسم —</option>${DEPARTMENTS.map(d => `<option value="${esc(d)}">${esc(d)}</option>`).join('')}</select>
       </div>
       <div class="field"><label>الأقسام المستشارة أولاً (تُعرض عليها قبل القسم النهائي)</label>
         <div id="consultDeptsSel" class="checkbox-grid" role="group" aria-label="الأقسام المستشارة">
-          ${DEPARTMENTS.map(d => `<label class="check-card"><input type="checkbox" name="consult_departments" value="${esc(d)}" onchange="syncConsultOptions()"><span>${esc(d)}</span></label>`).join('')}
+          ${DEPARTMENTS.map(d => `<label class="check-card"><input type="checkbox" name="departments" value="${esc(d)}" onchange="syncConsultOptions()"><span>${esc(d)}</span></label>`).join('')}
         </div>
         <small style="color:var(--muted);font-size:11px">حدد قسمًا أو عدة أقسام — لا يمكن تحديد القسم النهائي نفسه</small>
       </div>
@@ -2341,8 +2054,8 @@ async function submitReferral(e) {
   const d = Object.fromEntries(fd);
   delete d.files; // لا نخزّن كائن الملفات داخل بيانات الإحالة (تُعالج الملفات بشكل منفصل)
   const targetSpecialty = (d.target_specialty || '').trim();
-  const consultDepts = (fd.getAll('consult_departments') || []).map(x => String(x).trim()).filter(x => x && x !== targetSpecialty);
-  delete d.consult_departments;
+  const consultDepts = [];
+  delete d.departments;
   const submitBtn = $('submitBtn');
   try {
     const refNo = (d.ref_no || '').trim();
@@ -2360,9 +2073,9 @@ async function submitReferral(e) {
       age: d.age ? parseInt(d.age) : null,
       target_specialty: targetSpecialty,
       specialty: targetSpecialty,
-      consult_departments: consultDepts,
+      departments: consultDepts,
       department_responses: [],
-      status: consultDepts.length ? 'consulting' : 'awaiting_final',
+      status: 'awaiting_doctor',
       created_by: CURRENT_USER.id, created_at: nowIso(), updated_at: nowIso(),
       assigned_doctor_id: null, attachment_ids: [], timeline: [], doctor_viewed_at: null,
       departments: [targetSpecialty], opinions: []
@@ -2386,7 +2099,7 @@ async function submitReferral(e) {
       submitBtn.textContent = '📤 حفظ وإرسال للطبيب';
       submitBtn.disabled = false;
     }
-    const initState = consultDepts.length ? 'consulting' : 'awaiting_final';
+    const initState = 'awaiting_doctor';
     r.timeline.push({ ts: nowIso(), from: 'new', to: initState, user: CURRENT_USER.full_name, role: CURRENT_USER.role, user_id: CURRENT_USER.id, action: 'إنشاء الإحالة', details: { القسم_النهائي: targetSpecialty, الأقسام_المستشارة: consultDepts.join('، ') || '—' } });
     DATA.meta.seq++;
     Object.assign(DATA.attachments, stagedAttachments);
@@ -2472,7 +2185,7 @@ function openDetail(id) {
     </div>` : '';
 
   const targetDept = targetSpecialtyOf(r);
-  const consultDepts = r.consult_departments || [];
+  const consultDepts = r.departments || [];
   const deptResponses = r.department_responses || [];
   const routingHtml = `<div class="panel" style="box-shadow:none;margin:0 0 14px 0;background:#f8f7ff"><h3>🧭 مسار الإحالة</h3><div class="routing">
     ${consultDepts.map(d => {
@@ -2480,7 +2193,7 @@ function openDetail(id) {
       return `<div class="routing-node ${res ? 'done' : 'pending'}"><span class="rn-icon">${res ? '✓' : '⏳'}</span><b>${esc(d)}</b><small>${res ? esc(res.recommendation) : 'بانتظار الرد'}</small></div>`;
     }).join('<div class="routing-arrow">→</div>')}
     <div class="routing-arrow">→</div>
-    <div class="routing-node final ${r.status !== 'consulting' ? 'active' : ''}"><span class="rn-icon">🎯</span><b>${esc(targetDept)}</b><small>القرار النهائي (قبول / رفض)</small></div>
+    <div class="routing-node final ${r.status !== 'awaiting_doctor' ? 'active' : ''}"><span class="rn-icon">🎯</span><b>${esc(targetDept)}</b><small>القرار النهائي (قبول / رفض)</small></div>
   </div></div>`;
   const responsesHtml = deptResponses.length ? `<div class="dept-responses">${deptResponses.map(x => `
     <div class="dept-resp">
@@ -2574,10 +2287,10 @@ function getAvailableActions(r) {
 
 function renderActionForms(r, actions) {
   const from = r.status;
-  if (CURRENT_USER.role === 'doctor' && ['awaiting_doctor', 'resubmitted', 'awaiting_final'].includes(from)) {
+  if (CURRENT_USER.role === 'doctor' && ['awaiting_doctor', 'resubmitted', 'awaiting_doctor'].includes(from)) {
     return renderCombinedDoctorForm(r);
   }
-  if (from === 'consulting' && CURRENT_USER.role === 'doctor' && (r.consult_departments || []).includes(CURRENT_USER.department)) {
+  if (from === 'awaiting_doctor' && CURRENT_USER.role === 'doctor' && (r.departments || []).includes(CURRENT_USER.department)) {
     return renderConsultResponseForm(r);
   }
   return actions.forms.map(f => renderActionForm(r, f)).join('');
@@ -2586,7 +2299,7 @@ function renderActionForms(r, actions) {
 function renderCombinedDoctorForm(r) {
   const meta = typeMetaOf(r);
   const isConsul = isConsultation(r);
-  const isFinal = r.status === 'awaiting_final';
+  const isFinal = r.status === 'awaiting_doctor';
   const needWard = ['طارئ', 'تنويم عادي'].includes(r.priority);
   const infoText = isFinal ? `🎯 القرار النهائي لقسم ${targetSpecialtyOf(r)}` : (isConsul ? '📋 استشارة طبية — عبّئ النموذج ثم أرسله للمنسق' : (needWard ? 'يتطلب اختيار قسم/سرير' : 'قبول مباشر — بدون سرير'));
   const themed = isConsul || isFinal;
@@ -2600,13 +2313,11 @@ function renderCombinedDoctorForm(r) {
     <form onsubmit="executeCombinedDoctorAction(event,'${r.id}')" data-ref-id="${r.id}">
       <div class="grid2">
         <div class="field full"><label>اختر الإجراء *</label>
-          <input name="action_type" id="doctor-action-type" list="doctor-action-options" required placeholder="اكتب الإجراء أو اختر من القائمة" oninput="onDoctorActionChange(this)">
-          <datalist id="doctor-action-options">
+          <select name="action_type" id="doctor-action-type" required onchange="onDoctorActionChange(this)"><option value="">— اختر الإجراء —</option>
             ${isConsul ? '' : `<option value="doctor_accepted">${isFinal ? 'قبول نهائي' : 'قبول الإحالة'}</option>`}
             <option value="doctor_rejected">${isFinal ? 'رفض نهائي' : 'رفض الإحالة'}</option>
             <option value="info_requested">طلب مزيد من المعلومات</option>
-            ${isConsul ? '<option value="consultation_done">استشارة طبية</option>' : ''}
-          </datalist>
+            ${isConsul ? '<option value="consultation_done">استشارة طبية</option>' : ''}</select>
         </div>
         <div id="doctor-action-fields" class="full"></div>
       </div>
@@ -2657,7 +2368,7 @@ function onDoctorActionChange(sel) {
 
   const form = sel.closest('form'); const refId = form?.dataset.refId;
   const ref = refId ? DATA.referrals.find(x => x.id === refId) : null;
-  const mobileVal = CURRENT_USER.mobile || DEFAULT_MOBILES[CURRENT_USER.username] || ref?.doctor_mobile || '';
+  const mobileVal = CURRENT_USER.mobile || ref?.doctor_mobile || '';
   const priority = ref?.priority || '';
 
   if (v === 'doctor_accepted') {
@@ -2751,9 +2462,9 @@ function renderActionForm(r, action) {
   if (action.to === 'resubmitted') fields = `<div class="field full"><label>ملخص الاستكمال *</label><textarea name="notes" required></textarea></div>`;
   else if (action.to === 'bed_approved') {
     fields = `<div class="field"><label>توفر السرير *</label><select name="bed_available" required><option value="نعم">نعم</option><option value="لا">لا</option></select></div>
-      <div class="field"><label>نوع السرير *</label><input name="bed_type" list="workflow-bed-types" placeholder="اكتب النوع أو اختره" required><datalist id="workflow-bed-types">${BED_TYPE_OPTIONS.map(x => `<option value="${esc(x)}">`).join('')}</datalist></div>
+      <div class="field"><label>نوع السرير *</label><select name="bed_type" required><option value="">— اختر —</option>${BED_TYPE_OPTIONS.map(x => `<option value="${esc(x)}">${esc(x)}</option>`).join('')}</select></div>
       <div class="field"><label>القسم *</label><input name="bed_ward" placeholder="مثال: عناية مركزة" required></div>
-      <div class="field"><label>رقم الغرفة *</label><input name="bed_number" required placeholder="اكتب رقم الغرفة"></div>
+      <div class="field"><label>السرير المتاح *</label><select name="bed_number" required><option value="">— اختر سريراً متاحاً —</option>${(DATA.beds || []).filter(b => b.available === true).map(b => `<option value="${esc(b.number || b.id)}">${esc(b.number || b.id)}${b.ward ? ' — ' + esc(b.ward) : ''}</option>`).join('')}</select></div>
       <div class="field"><label>تاريخ دخول المريض</label><input type="date" name="admission_date"></div>
       <div class="field"><label>تاريخ القبول</label><input type="date" name="acceptance_date"></div>
       <div class="field"><label>مدة حجز السرير</label><input name="bed_duration" placeholder="مثال: 6 ساعات، 3 أيام"></div>
@@ -3350,7 +3061,6 @@ function addUser(e) {
   const salt = randomHex(32);
   DATA.users.push({
     id: uid(), username: d.username, salt, hash: hashPassword(d.password, salt),
-    plain_password: obfuscate(d.password), mobile: d.mobile.trim(),
     full_name: d.full_name, role: d.role, department: d.role === 'doctor' ? d.department : null,
     active: true, created_at: nowIso(),
     must_change_password: true, password_history: [],
@@ -3762,7 +3472,6 @@ function resetAll() {
   localStorage.removeItem(SESSION_KEY);
   sessionStorage.removeItem(PENDING_SYNC_KEY);
   localStorage.removeItem(LOGO_STORAGE_KEY);
-  localStorage.removeItem(OBF_KEY_STORE);
   sessionStorage.removeItem(SESSION_KEY);
   try { indexedDB.deleteDatabase('wasl_attachments_v1'); } catch (e) {}
   setTimeout(() => location.reload(), 400);
@@ -3774,44 +3483,15 @@ function resetAll() {
 (async function boot() {
   const btn = $('loginBtn'), btnText = $('loginBtnText'), errEl = $('loginErr');
   try {
-    DATA = await loadData();
-    if (DATA) { CONFIRMED_STATE = JSON.parse(JSON.stringify(DATA)); LAST_REMOTE_REVISION = Number(DATA.meta.sync_revision || 0); LOCAL_CHANGE_AT = DATA.meta.local_updated_at || ''; }
-    restorePendingJournal();
-    if (!DATA) { DATA = initData(); CONFIRMED_STATE = JSON.parse(JSON.stringify(DATA)); saveData(); }
-    if (!DATA.notifications) DATA.notifications = [];
-    if (!DATA.attachments || typeof DATA.attachments !== 'object') DATA.attachments = {};
-    if (!Array.isArray(DATA.chats)) DATA.chats = [];
-    if (!Array.isArray(DATA.shifts)) DATA.shifts = [];
-    setupRealtime();
-    if (!DATA.meta.seed_done) seedIfNeeded(false);
-    migrateOldStates();
-    ensureChatShiftsData();
-    try { await openAttsDB(); } catch (dbErr) { console.warn('[WASL] IndexedDB:', dbErr.message); }
-    preloadLogos().catch(e => console.warn('[WASL] Logo preload:', e));
-    updateSyncWarning();
-    if (!_syncBlocked && LOCAL_CHANGE_SERIAL !== CONFIRMED_CHANGE_SERIAL) syncToBackend();
-    if (RECOVERED_SYNC_ERROR) { errEl.textContent = RECOVERED_SYNC_ERROR; errEl.classList.remove('hidden'); }
-    const sess = localStorage.getItem(SESSION_KEY) || sessionStorage.getItem(SESSION_KEY);
-    if (sess) {
-      try {
-        const s = JSON.parse(sess);
-        if (Date.now() < s.exp) {
-          const user = DATA.users.find(x => x.id === s.userId);
-          if (user && user.active && !user.pending_approval && !user.rejected) {
-            const normalized = JSON.stringify({ userId: user.id, exp: s.exp });
-            localStorage.setItem(SESSION_KEY, normalized);
-            sessionStorage.setItem(SESSION_KEY, normalized);
-            CURRENT_USER = user; enterApp(); if (RECOVERED_SYNC_ERROR) toast(RECOVERED_SYNC_ERROR, 'err'); return;
-          }
-        }
-      } catch (e) {}
+    await loadClientConfig();
+    const session = await fetch(API_BASE + '/api/login', { credentials: 'same-origin', cache: 'no-store' });
+    if (session.ok) {
+      const body = await session.json();
+      if (body.authenticated && body.user) { CURRENT_USER = body.user; await finishAuthenticatedBoot(); return; }
     }
-    localStorage.removeItem(SESSION_KEY);
-    sessionStorage.removeItem(SESSION_KEY);
     btn.disabled = false; btnText.textContent = 'دخول';
   } catch (e) {
-    errEl.innerHTML = `<b>فشل التهيئة</b><br>${esc(e.message)}`;
-    errEl.classList.remove('hidden'); btnText.textContent = 'فشل التهيئة';
+    errEl.innerHTML = `<b>فشل التهيئة</b><br>${esc(e.message)}`; errEl.classList.remove('hidden'); btnText.textContent = 'فشل التهيئة';
   }
 })();
 </script>

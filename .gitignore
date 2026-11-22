@@ -1,4 +1,14 @@
 node_modules/
 .env
+.env.*
+!.env.example
+backend/.env
+backend/.env.*
+!backend/.env.example
 *.log
+*.pem
+*.key
+*.p12
+credentials*.json
+secrets*.json
 .DS_Store

@@ -5,6 +5,7 @@
 create table if not exists public.user_profiles (
   auth_user_id uuid primary key references auth.users(id) on delete cascade,
   employee_number text not null unique,
+  email text not null unique,
   full_name text not null,
   role text not null check (role in ('admin','coordinator','doctor','beds')),
   department text,
@@ -15,6 +16,9 @@ create table if not exists public.user_profiles (
 
 create index if not exists user_profiles_role_active_idx
   on public.user_profiles(role, active);
+
+-- اربط البريد في هذا الجدول ببريد auth.users عند إنشاء الحساب؛ لا تُضع
+-- كلمات المرور هنا ولا تُنسخ إلى app_state.
 
 alter table public.user_profiles enable row level security;
 revoke all on table public.user_profiles from public, anon, authenticated;

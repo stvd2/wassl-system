@@ -2,9 +2,8 @@
 -- وَصْل (Wassl) — مخطط قاعدة بيانات Supabase (النسخة العاملة)
 -- ----------------------------------------------------------------------------
 -- يعمل التطبيق بنموذج "حالة كاملة" (single source of truth) عبر جدول app_state.
--- الخادم (Node/Express) هو الوسيط الوحيد الذي يقرأ/يكتب الجدول باستخدام
--- المفتاح السري (service_role). لا يصل المتصفح إلى Supabase مباشرة أبداً،
--- لذلك لا نفعّل RLS هنا (تفعيله كان يحجب المفتاح السري نفسه في البنية الحالية).
+-- الخادم هو الوسيط الوحيد الذي يقرأ/يكتب الجدول، ويتحقق من Supabase Auth
+-- والدور من user_profiles قبل استخدام service_role. لا يصل المتصفح إلى الجدول مباشرة.
 -- ----------------------------------------------------------------------------
 -- طريقة التطبيق: الصق الملف كاملاً في Supabase → SQL Editor → Run.
 -- ============================================================================
@@ -17,6 +16,9 @@ create table if not exists public.app_state (
 
 create index if not exists app_state_updated_at_idx
   on public.app_state (updated_at desc);
+
+alter table public.app_state enable row level security;
+revoke all on public.app_state from public, anon, authenticated;
 
 -- منح الصلاحيات للمفتاح السري (service_role) الذي يستخدمه الخادم
 grant all privileges on public.app_state to service_role;

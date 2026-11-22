@@ -2,6 +2,9 @@
   "name": "wassl-system",
   "version": "1.0.0",
   "private": true,
+  "scripts": {
+    "security:scan": "node tests/security/repository_scan.cjs"
+  },
   "dependencies": {
     "@supabase/supabase-js": "^2.45.0"
   }

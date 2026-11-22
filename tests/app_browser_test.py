@@ -31,7 +31,11 @@ class Handler(SimpleHTTPRequestHandler):
         self.send_response(status); self.send_header('Content-Type', kind); self.send_header('Content-Length', str(len(data))); self.end_headers(); self.wfile.write(data)
     def do_GET(self):
         path = urlparse(self.path)
-        if path.path == '/api/state':
+        if path.path == '/api/config':
+            self.reply(200, {'supabaseUrl': '', 'supabaseClientKey': ''})
+        elif path.path == '/api/login':
+            self.reply(200, {'authenticated': True, 'user': deepcopy(users[0])})
+        elif path.path == '/api/state':
             with lock: self.reply(200, deepcopy(state))
         elif path.path == '/api/attachment':
             key = parse_qs(path.query).get('id', [''])[0]
@@ -67,7 +71,6 @@ def main():
             browser = p.chromium.launch(executable_path='/usr/bin/chromium', headless=True, args=['--no-sandbox'])
             context = browser.new_context(viewport={'width':390, 'height':844})
             context.route('https://**/*', lambda r: r.abort())
-            context.add_init_script("localStorage.setItem('wasl_session_v6', JSON.stringify({userId:'admin-id',exp:Date.now()+3600000}))")
             page = context.new_page(); errors = []; page.on('pageerror', lambda e: errors.append(str(e)))
             page.goto(url, wait_until='domcontentloaded')
             page.wait_for_selector('#app:not(.hidden)', timeout=15000)
@@ -159,8 +162,9 @@ def main():
             item = page.evaluate("DATA.shifts.find(s => s.date === '2027-02-15')")
             assert item['attachment_id'] in attachments, 'original file should be stored'
             page.evaluate("showPage('create')")
-            for field, value in {'patient_name':'مسودة محفوظة','mrn':'999999','ref_no':'TEST-FAIL','to_hospital':'مستشفى وهمي','target_specialty':'الباطنة','diagnosis':'فحص محلي'}.items():
+            for field, value in {'patient_name':'مسودة محفوظة','mrn':'999999','ref_no':'TEST-FAIL','to_hospital':'مستشفى وهمي','diagnosis':'فحص محلي'}.items():
                 page.locator(f'#createForm [name={field}]').fill(value)
+            page.locator('#createForm [name=target_specialty]').select_option('الباطنة')
             page.locator('#createForm [name=priority]').select_option('تنويم عادي')
             page.locator('#createForm [name=files]').set_input_files({'name':'fake.pdf','mimeType':'application/pdf','buffer':b'fake-pdf'})
             before = page.evaluate('DATA.referrals.length')

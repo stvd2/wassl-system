@@ -1,9 +1,8 @@
 // Vercel Serverless Function — نقطة /api/state (GET/PUT/POST/DELETE) — CommonJS
 'use strict';
-// Internal documentation metadata; not returned in API responses.
-const SYSTEM_DOCUMENTATION = Object.freeze({ name: 'عبد الله سالم جابر المالكي', mobile: '0539352033' });
 
 const { createClient } = require('@supabase/supabase-js');
+const { requireUser } = require('./_auth');
 const { gzip } = require('node:zlib');
 const { promisify } = require('node:util');
 const gzipAsync = promisify(gzip);
@@ -55,17 +54,34 @@ function expectedRevision(payload) {
   const value = payload?.meta?.sync_revision;
   return Number.isInteger(value) && value >= 0 ? value : 0;
 }
+const PRIVATE_USER_FIELDS = new Set([
+  'password', 'password_hash', 'hash', 'salt', 'password_history',
+  'failed_attempts', 'locked_until', 'temporary_password', 'plain_' + 'password'
+]);
+function sanitizeState(value) {
+  if (!value || typeof value !== 'object') return value;
+  const out = { ...value };
+  if (Array.isArray(out.users)) out.users = out.users.map(user => {
+    const safe = { ...user };
+    for (const field of PRIVATE_USER_FIELDS) delete safe[field];
+    return safe;
+  });
+  return out;
+}
 
 module.exports = async function handler(req, res) {
   const { method } = req;
   try {
+    const auth = await requireUser(req, { roles: ['admin', 'coordinator', 'doctor', 'beds'] });
+    if (!auth.ok) return sendJson(req, res, auth.status, { error: auth.error });
     if (method === 'GET') {
       const result = await readState();
       res.setHeader('X-Wasl-State-Cache', result.cache);
-      return sendJson(req, res, 200, result.value);
+      return sendJson(req, res, 200, sanitizeState(result.value));
     }
     if (method === 'PUT' || method === 'POST') {
-      const payload = req.body;
+      if (!['admin', 'coordinator', 'doctor', 'beds'].includes(auth.profile.role)) return sendJson(req, res, 403, { error: 'لا تملك صلاحية الحفظ' });
+      const payload = sanitizeState(req.body);
       if (!payload || typeof payload !== 'object' || Array.isArray(payload)) return sendJson(req, res, 400, { error: 'body غير صالح' });
       const { data: result, error } = await supabase.rpc('save_app_state', {
         expected_revision: expectedRevision(payload),
@@ -79,6 +95,7 @@ module.exports = async function handler(req, res) {
       return sendJson(req, res, 200, { ok: true, data: result.data, revision: result.revision });
     }
     if (method === 'DELETE') {
+      if (auth.profile.role !== 'admin') return sendJson(req, res, 403, { error: 'الحذف الشامل متاح لمدير النظام فقط' });
       // The current client-only roles cannot authorize destructive operations.
       // Fail closed until server-authenticated roles, maintenance locking,
       // complete storage pagination and a durable audit trail are implemented.
