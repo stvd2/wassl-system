@@ -88,7 +88,8 @@ table.t tr:hover td{background:#fafcfc}
 .att-meta small{color:var(--muted);font-size:11px}
 .file-icon{width:36px;height:36px;background:#eaf3f3;color:var(--teal);border-radius:8px;display:grid;place-items:center;font-size:15px;flex:none}
 .searchbox{max-width:340px;padding:10px 14px}
-.empty{text-align:center;padding:50px 20px;color:var(--muted);font-size:14px}
+.empty{text-align:center;padding:50px 20px;color:var(--muted);font-size:14px}.checkbox-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px;background:#f7f9fa;border:1px solid var(--line);border-radius:10px;padding:10px}.check-card{display:flex;align-items:center;gap:8px;padding:9px 10px;background:#fff;border:1px solid var(--line);border-radius:8px;cursor:pointer;font-size:12px}.check-card:has(input:checked){border-color:var(--teal);background:#eaf7f5;color:var(--teal);font-weight:700}.check-card input{width:auto;margin:0}@media(max-width:600px){.checkbox-grid{grid-template-columns:1fr}}
+
 .empty-icon{font-size:48px;margin-bottom:14px;opacity:.5}
 .storage-info{background:#f0f6ff;border:1px solid #d0e0f0;border-radius:8px;padding:10px 14px;font-size:12px;color:#1a4a7a;margin-top:8px;line-height:1.6}
 .storage-info b{color:var(--navy)}
@@ -445,6 +446,8 @@ const WARD_OPTIONS = {
 const BED_TYPE_OPTIONS = ['طوارئ', 'سرير عادي', 'سرير عزل', 'سرير عناية مركزة'];
 
 const OBF_KEY_STORE = 'wasl_obf_key_v1';
+const SYSTEM_DOCUMENTED_BY = 'عبد الله سالم جابر المالكي';
+const SYSTEM_DOCUMENTED_MOBILE = '0539352033';
 const DEFAULT_MOBILES = {
   'admin': '0515468605', '1010': '0512345678', '1313': '0512345680',
   '1040': '0512345701', '1515': '0512345702', '1616': '0512345703', '1717': '0512345704',
@@ -1280,7 +1283,7 @@ function getChatSubtitle(chat) {
   }
   const otherId = (chat.members || []).find(id => id !== CURRENT_USER.id);
   const other = DATA.users.find(u => u.id === otherId);
-  return other ? roleLabel(other.role) + (other.department ? ' — ' + other.department : '') : '';
+  return other ? `${isUserOnline(other) ? '● متصل الآن' : '○ غير متصل'} — ${roleLabel(other.role)}${other.department ? ' — ' + other.department : ''}` : '';
 }
 function getUnreadCount(chat) {
   const lastRead = (chat.reads && chat.reads[CURRENT_USER.id]) || '1970-01-01T00:00:00.000Z';
@@ -1347,6 +1350,18 @@ function deleteShift(id) {
   audit('shift_deleted', 'shift', id, '');
 }
 
+let PRESENCE_TIMER = null;
+function isUserOnline(user) { return !!(user?.last_seen_at && Date.now() - new Date(user.last_seen_at).getTime() < 90000); }
+function touchPresence() {
+  if (!CURRENT_USER || !DATA) return;
+  const u = DATA.users.find(x => x.id === CURRENT_USER.id);
+  if (!u) return;
+  u.last_seen_at = nowIso(); CURRENT_USER = u; saveData();
+}
+function startPresence() {
+  touchPresence();
+  clearInterval(PRESENCE_TIMER); PRESENCE_TIMER = setInterval(touchPresence, 60000);
+}
 // ═══════════════════════════════════════════════════════════════════
 // تسجيل الدخول والتسجيل
 // ═══════════════════════════════════════════════════════════════════
@@ -1552,6 +1567,9 @@ function doLogin() {
     }
     user.failed_attempts = 0; user.locked_until = null; saveData();
     CURRENT_USER = user;
+    user.last_seen_at = nowIso();
+    if (user.role === 'doctor') notifyRole('all', null, `الطبيب ${user.full_name} متصل الآن`, user.full_name);
+    startPresence();
     const session = JSON.stringify({ userId: user.id, exp: Date.now() + 8 * 3600e3 });
     localStorage.setItem(SESSION_KEY, session);
     sessionStorage.setItem(SESSION_KEY, session);
@@ -1569,7 +1587,7 @@ function doLogout() {
   localStorage.removeItem(SESSION_KEY);
   localStorage.removeItem(PAGE_SESSION_KEY);
   sessionStorage.removeItem(SESSION_KEY);
-  CURRENT_USER = null; CURRENT_CHAT = null;
+  clearInterval(PRESENCE_TIMER); PRESENCE_TIMER = null; CURRENT_USER = null; CURRENT_CHAT = null;
   $('app').classList.add('hidden');
   $('loginScreen').classList.remove('hidden');
   $('loginPass').value = '';
@@ -1821,7 +1839,7 @@ function buildNav() {
       { id: 'forward_consultant', icon: '⇄', label: 'قبول الطبيب', count: accepted.length },
       { id: 'consultation_ready', icon: '📋', label: 'استشارات جاهزة', count: consultation.length },
       { id: 'need_supplement', icon: '📝', label: 'استكمال مطلوب', count: needSupp.length },
-      { id: 'bed_decisions', icon: '🛏', label: 'قرارات الأسرة', count: bedDecisions.length },
+      ...(r !== 'coordinator' ? [{ id: 'bed_decisions', icon: '🛏', label: 'قرارات الأسرة', count: bedDecisions.length }] : []),
       { id: 'reports', icon: '▤', label: 'التقارير' }
     ];
   } else if (r === 'doctor') {
@@ -1861,6 +1879,7 @@ function showPage(p) {
   if (p === 'bed_management' && !['admin', 'beds'].includes(CURRENT_USER.role)) {
     p = CURRENT_USER.role === 'beds' ? 'bed_requests' : 'outgoing';
   }
+  if (p === 'bed_decisions' && CURRENT_USER.role === 'coordinator') p = 'outgoing';
   if (p === 'dashboard' && CURRENT_USER.role === 'doctor') p = 'doctor_inbox';
   if (p === 'dashboard' && CURRENT_USER.role === 'beds') p = 'bed_requests';
 
@@ -1946,7 +1965,7 @@ function renderDashboard() {
     { label: 'قبول الطبيب', val: byStatus.doctor_accepted, filter: 'forward_consultant' },
     { label: 'استكمال مطلوب', val: byStatus.info_requested, filter: 'need_supplement' },
     { label: 'بانتظار الأسرة', val: byStatus.awaiting_bed, filter: 'outgoing' },
-    { label: 'قرارات الأسرة', val: byStatus.bed_approved + byStatus.bed_rejected, filter: 'bed_decisions' },
+    ...(CURRENT_USER.role !== 'coordinator' ? [{ label: 'قرارات الأسرة', val: byStatus.bed_approved + byStatus.bed_rejected, filter: 'bed_decisions' }] : []),
     { label: 'مكتملة', val: byStatus.completed, filter: 'reports' }
   ];
 
@@ -2084,10 +2103,11 @@ function syncConsultOptions() {
   const target = $('targetSpecialtySel');
   const consult = $('consultDeptsSel');
   if (!target || !consult) return;
-  const tval = target.value;
-  Array.from(consult.options).forEach(o => {
-    o.disabled = !!tval && o.value === tval;
-    if (o.disabled) o.selected = false;
+  const tval = target.value.trim();
+  consult.querySelectorAll('input[name=\"consult_departments\"]').forEach(input => {
+    const disabled = !!tval && input.value === tval;
+    input.disabled = disabled;
+    if (disabled) input.checked = false;
   });
 }
 
@@ -2108,10 +2128,10 @@ function renderCreate() {
         <datalist id="department-options">${DEPARTMENTS.map(d => `<option value="${esc(d)}">`).join('')}</datalist>
       </div>
       <div class="field"><label>الأقسام المستشارة أولاً (تُعرض عليها قبل القسم النهائي)</label>
-        <select name="consult_departments" id="consultDeptsSel" multiple size="6" onchange="syncConsultOptions()">
-          ${DEPARTMENTS.map(d => `<option value="${esc(d)}">${esc(d)}</option>`).join('')}
-        </select>
-        <small style="color:var(--muted);font-size:11px">اضغط Ctrl لاختيار عدة أقسام — لا يمكن اختيار القسم النهائي نفسه</small>
+        <div id="consultDeptsSel" class="checkbox-grid" role="group" aria-label="الأقسام المستشارة">
+          ${DEPARTMENTS.map(d => `<label class="check-card"><input type="checkbox" name="consult_departments" value="${esc(d)}" onchange="syncConsultOptions()"><span>${esc(d)}</span></label>`).join('')}
+        </div>
+        <small style="color:var(--muted);font-size:11px">حدد قسمًا أو عدة أقسام — لا يمكن تحديد القسم النهائي نفسه</small>
       </div>
       <div class="field"><label>نوع الإحالة *</label>
         <select name="priority" required>
@@ -2707,10 +2727,10 @@ function markAllRead() {
 function exportStateJson() {
   if (CURRENT_USER?.role !== 'admin') return toast('التصدير متاح لمدير النظام فقط', 'err');
   const snapshot = JSON.parse(JSON.stringify(DATA || {}));
-  snapshot.meta = { ...(snapshot.meta || {}), exported_at: nowIso(), export_source: 'wasl-v9-db-monitor' };
+  snapshot.meta = { ...(snapshot.meta || {}), exported_at: nowIso(), export_source: 'wasl-db-monitor' };
   const blob = new Blob([JSON.stringify(snapshot, null, 2)], { type: 'application/json;charset=utf-8' });
   const url = URL.createObjectURL(blob), a = document.createElement('a');
-  a.href = url; a.download = `wasl-v9-backup-${new Date().toISOString().replace(/[:.]/g, '-')}.json`;
+  a.href = url; a.download = `wasl-backup-${new Date().toISOString().replace(/[:.]/g, '-')}.json`;
   document.body.appendChild(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(url), 1000);
   audit('state_exported', 'system', 'main', `revision ${snapshot.meta.sync_revision || 0}`);
   toast('✓ تم تصدير نسخة JSON محلية', 'ok');
@@ -2774,6 +2794,21 @@ function freshResetSystemSafe() {
   showPage('db_monitor');
 }
 
+async function purgeDatabaseSafe() {
+  if (CURRENT_USER?.role !== 'admin') return toast('الحذف الكامل متاح لمدير النظام فقط', 'err');
+  const adminKey = prompt('أدخل مفتاح الحذف الإداري المهيأ في Vercel (لا يظهر على الشاشة)');
+  if (!adminKey) return toast('تم إلغاء الحذف', 'warn');
+  if (prompt('للحذف الكامل اكتب العبارة حرفيًا: تأكيد حذف قاعدة البيانات بالكامل') !== 'تأكيد حذف قاعدة البيانات بالكامل') return toast('تم إلغاء الحذف', 'warn');
+  if (!confirm('سيحذف هذا الإجراء الحالة الأساسية وكل الإحالات والمحادثات والمستخدمين والمناوبات وسجل التدقيق وملفات المرفقات من Supabase. لا يمكن التراجع عنه. متابعة؟')) return;
+  try {
+    const res = await fetch('/api/state', { method: 'DELETE', cache: 'no-store', headers: { 'X-Wasl-Admin-Key': adminKey, 'X-Wasl-Admin-Confirm': 'تأكيد حذف قاعدة البيانات بالكامل' } });
+    const body = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(body.error || `فشل الحذف (${res.status})`);
+    localStorage.clear(); sessionStorage.clear();
+    alert(`تم الحذف الكامل بنجاح. عدد ملفات المرفقات المحذوفة: ${body.deleted_attachments || 0}`);
+    location.reload();
+  } catch (e) { toast('تعذر الحذف الكامل: ' + e.message, 'err'); }
+}
 function renderDbMonitor() {
   if (CURRENT_USER?.role !== 'admin') return showPage('dashboard');
   const sizeKb = new Blob([JSON.stringify(DATA || {})]).size / 1024;
@@ -2782,7 +2817,8 @@ function renderDbMonitor() {
   const rows = [['الإحالات', DATA.referrals.length],['المستخدمون', DATA.users.length],['الأسرة', DATA.beds.length],['المحادثات', DATA.chats.length],['المناوبات', DATA.shifts.length],['بيانات المرفقات', Object.keys(DATA.attachments || {}).length],['سجل التدقيق', DATA.audit.length],['الإشعارات', DATA.notifications.length]];
   $('content').innerHTML = `<div class="stats"><div class="stat"><label>إصدار الخادم</label><strong>${Number(DATA.meta?.sync_revision || 0)}</strong></div><div class="stat"><label>حجم الحالة التقريبي</label><strong>${sizeKb.toFixed(1)} KB</strong></div><div class="stat"><label>حالة المزامنة</label><strong>${_syncBlocked ? 'متعارضة' : 'Supabase'}</strong></div><div class="stat"><label>آخر تعديل محلي</label><strong style="font-size:12px;direction:ltr">${esc(DATA.meta?.local_updated_at || '—')}</strong></div></div>
     <div class="panel"><h3>📡 مراقبة القاعدة والسعة والمزامنة</h3><div class="notice info">المؤشر التالي تقديري لحجم حالة JSON مقارنة بحد إرشادي قدره ${FREE_QUOTA_KB.toLocaleString('en-US')} KB. لا يمثل قياس Supabase الكامل، ولا يتم حذف أو تصفير قاعدة الإنتاج تلقائياً.</div><div style="display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap"><b>${sizeKb.toFixed(1)} KB / ${FREE_QUOTA_KB.toLocaleString('en-US')} KB</b><span>${quotaPct}%</span></div><div class="quota-meter" aria-label="مؤشر سعة الحالة"><div class="quota-fill ${quotaClass}" style="width:${Math.max(2, quotaPct)}%"></div></div>${quotaPct >= 70 ? `<div class="notice ${quotaPct >= 90 ? 'danger' : 'warn'}">⚠️ اقترب حجم الحالة من الحد الإرشادي. صدّر نسخة JSON قبل أي عملية تنظيف.</div>` : ''}<div style="display:flex;gap:8px;flex-wrap:wrap"><button class="primary" onclick="syncNow()">🔄 مزامنة الآن</button><button class="secondary" onclick="exportStateJson()">⬇ تصدير JSON</button><button class="warn" onclick="chooseStateImport()">⬆ استيراد JSON إلى الخادم</button></div><div class="twrap" style="margin-top:16px"><table class="t" style="min-width:520px"><thead><tr><th>المخزن</th><th>العدد</th></tr></thead><tbody>${rows.map(([k,v]) => `<tr><td><b>${esc(k)}</b></td><td dir="ltr">${Number(v).toLocaleString('en-US')}</td></tr>`).join('')}</tbody></table></div></div>
-    <div class="panel"><h3 style="color:var(--red)">🧹 تنظيف الحالة التشغيلية</h3><div class="notice danger">هذه العمليات تكتب حالة جديدة إلى Supabase بعد تأكيدين صريحين. الحسابات وكلمات المرور والمرفقات لا تُحذف تلقائياً، ولا يتم استدعاء DELETE.</div><div style="display:flex;gap:8px;flex-wrap:wrap"><button class="warn" onclick="resetOperationalDataSafe()">مسح البيانات التشغيلية وتصفير العدادات</button><button class="danger" onclick="freshResetSystemSafe()">إعادة الحالة التشغيلية للبداية</button></div></div>`;
+    <div class="panel"><h3 style="color:var(--red)">🧹 تنظيف الحالة التشغيلية</h3><div class="notice danger">هذه العمليات تكتب حالة جديدة إلى Supabase بعد تأكيدين صريحين. الحسابات وكلمات المرور والمرفقات لا تُحذف في التنظيف التشغيلي.</div><div style="display:flex;gap:8px;flex-wrap:wrap"><button class="warn" onclick="resetOperationalDataSafe()">مسح البيانات التشغيلية وتصفير العدادات</button><button class="danger" onclick="freshResetSystemSafe()">إعادة الحالة التشغيلية للبداية</button></div></div>
+    <div class="panel" style="border:2px solid var(--red)"><h3 style="color:var(--red)">⚠ حذف كامل لقاعدة الإنتاج والمرفقات</h3><div class="notice danger">للمدير فقط: يحذف الحالة الأساسية وملفات Supabase Storage والمستخدمين والمحادثات نهائيًا. لا يظهر هذا الإجراء إلا هنا ويتطلب مفتاحًا سريًا من بيئة Vercel وعبارة تأكيد حرفية وتأكيدًا ثانيًا.</div><button class="danger" onclick="purgeDatabaseSafe()">حذف قاعدة البيانات والمرفقات نهائيًا</button></div>`;
 }
 
 // ═══════════════════════════════════════════════════════════════════
@@ -3075,7 +3111,7 @@ function renderUsers() {
         <button class="ghost xs" onclick="resetUserPassword('${u.id}')">🔑</button>
         <button class="ghost xs" onclick="editUserMobile('${u.id}')">📱</button>
         ${locked ? `<button class="ghost xs" onclick="unlockUser('${u.id}')">🔓</button>` : ''}
-        ${u.username === 'admin' ? '' : `<button class="ghost xs" onclick="toggleUser('${u.id}')">${u.active ? 'تعطيل' : 'تفعيل'}</button>`}
+        ${u.username === 'admin' ? '' : `<button class="ghost xs" onclick="toggleUser('${u.id}')">${u.active ? 'تعطيل' : 'تفعيل'}</button><button class="danger xs" onclick="deleteUser('${u.id}')">🗑 حذف</button>`}
       </td>
     </tr>`;
   }).join('');
@@ -3142,6 +3178,15 @@ function addUser(e) {
   renderUsers();
 }
 
+function deleteUser(id) {
+  if (CURRENT_USER?.role !== 'admin') return toast('الحذف متاح لمدير النظام فقط', 'err');
+  const u = DATA.users.find(x => x.id === id);
+  if (!u || u.id === CURRENT_USER.id || u.username === 'admin') return toast('لا يمكن حذف هذا المستخدم', 'err');
+  if (!confirm(`حذف المستخدم «${u.full_name}» نهائيًا؟`)) return;
+  DATA.users = DATA.users.filter(x => x.id !== id);
+  DATA.chats = (DATA.chats || []).filter(c => !(c.type === 'direct' && (c.members || []).includes(id)));
+  saveData(); audit('user_deleted', 'user', id, u.username); toast('✓ تم حذف المستخدم', 'ok'); renderUsers();
+}
 function renderAudit() {
   if (CURRENT_USER.role !== 'admin') return;
   const logs = DATA.audit.slice(0, 200);
@@ -3308,7 +3353,7 @@ function showNewChatPicker() {
     <div style="max-height:60vh;overflow:auto">
       ${users.length ? users.map(u => `<div class="chat-item" onclick="closeModal();const c=getOrCreateDirectChat('${u.id}');if(c){CHAT_TAB='direct';openChat(c.id);}">
         <div class="chat-av">${esc(u.full_name[0])}</div>
-        <div class="meta"><b>${esc(u.full_name)}</b><small>${roleLabel(u.role)}${u.department ? ' — ' + esc(u.department) : ''}</small></div>
+        <div class="meta"><b>${esc(u.full_name)}</b><small>${isUserOnline(u) ? '● متصل الآن' : '○ غير متصل'} — ${roleLabel(u.role)}${u.department ? ' — ' + esc(u.department) : ''}</small></div>
       </div>`).join('') : '<div class="empty">لا مستخدمون</div>'}
     </div>
   </div></div>`;
@@ -3342,7 +3387,7 @@ function renderShiftCard(s, isToday) {
     <div class="sh-user">${esc(s.user_name)}</div>
     <div class="sh-role">${roleLabel(s.role)}</div>
     <span class="sh-badge ${s.shift==='مسائي'?'evening':s.shift==='ليلي'?'night':''}">${s.shift==='صباحي'?'🌅':s.shift==='مسائي'?'🌇':'🌙'} ${esc(s.shift)}</span>
-    ${s.notes ? `<div class="sh-notes">📝 ${esc(s.notes)}</div>` : ''}
+    ${s.notes ? `<div class="sh-notes">📝 ${esc(s.notes)}</div>` : ''}${s.attachment_id ? `<button class="secondary xs" style="margin-top:8px" onclick="downloadAtt('${esc(s.attachment_id)}')">📎 ${esc(s.attachment_name || 'فتح المرفق')}</button>` : ''}
   </div>`;
 }
 
@@ -3356,22 +3401,26 @@ function showAddShift() {
       <div class="field"><label>الفترة *</label><select name="shift" required><option value="صباحي">🌅 صباحي</option><option value="مسائي">🌇 مسائي</option><option value="ليلي">🌙 ليلي</option></select></div>
       <div class="field"><label>الدور *</label><select name="role" required><option value="">— اختر —</option><option value="coordinator">منسق</option><option value="doctor">طبيب</option><option value="beds">إدارة أسرة</option><option value="admin">مدير</option></select></div>
       <div class="field"><label>المستخدم *</label><select name="user_id" required><option value="">— اختر —</option>${users.map(u => `<option value="${u.id}">${esc(u.full_name)} — ${roleLabel(u.role)}${u.department ? ' (' + esc(u.department) + ')' : ''}</option>`).join('')}</select></div>
-      <div class="field"><label>ملاحظات</label><input name="notes" placeholder="مثال: قسم الطوارئ"></div>
+      <div class="field"><label>ملاحظات</label><input name="notes" placeholder="مثال: قسم الطوارئ"></div><div class="field full"><label>إرفاق ملف PDF أو Excel</label><input type="file" name="shift_file" accept=".pdf,.xls,.xlsx,application/pdf,application/vnd.ms-excel,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"></div>
       <button class="primary" type="submit" style="width:100%">إضافة</button>
     </form>
   </div></div>`;
 }
 
-function submitAddShift(e) {
+async function submitAddShift(e) {
   e.preventDefault();
   const fd = new FormData(e.target);
   const userId = fd.get('user_id');
   const user = DATA.users.find(u => u.id === userId);
   if (!user) return toast('مستخدم غير موجود', 'err');
-  addShift({ date: fd.get('date'), shift: fd.get('shift'), role: fd.get('role'), user_id: userId, user_name: user.full_name, notes: fd.get('notes') });
-  closeModal();
-  toast('✓ تم', 'ok');
-  renderShiftsPage();
+  const file = e.target.querySelector('[name=shift_file]')?.files?.[0];
+  const data = { date: fd.get('date'), shift: fd.get('shift'), role: fd.get('role'), user_id: userId, user_name: user.full_name, notes: fd.get('notes') };
+  if (file) {
+    if (file.size > 15 * 1024 * 1024) return toast('حجم الملف يتجاوز 15 م.ب', 'err');
+    try { const attId = 'ATT-' + uid(); await attsPut(attId, file); data.attachment_id = attId; data.attachment_name = file.name; DATA.attachments[attId] = { id: attId, referral_id: 'shift', name: file.name, type: file.type, size: file.size, uploaded_at: nowIso() }; }
+    catch (err) { return toast('فشل رفع ملف المناوبة', 'err'); }
+  }
+  addShift(data); closeModal(); toast('✓ تم', 'ok'); renderShiftsPage();
 }
 
 function resetAll() {

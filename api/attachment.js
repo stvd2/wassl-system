@@ -45,7 +45,7 @@ module.exports = async function handler(req, res) {
   try {
     if (req.method === 'PUT' || req.method === 'POST') {
       const contentType = String(req.headers['content-type'] || 'application/octet-stream');
-      if (!['application/pdf', 'image/jpeg', 'image/png', 'image/webp'].includes(contentType.split(';')[0])) {
+      if (!['application/pdf', 'image/jpeg', 'image/png', 'image/webp', 'application/vnd.ms-excel', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', 'text/csv'].includes(contentType.split(';')[0])) {
         return send(res, 415, JSON.stringify({ error: 'نوع الملف غير مسموح' }));
       }
       const body = await readBody(req);
