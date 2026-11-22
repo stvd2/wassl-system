@@ -8,6 +8,26 @@ const validEmployee = v => /^[A-Za-z0-9_.-]{3,30}$/.test(v);
 const validMobile = v => /^05\d{8}$/.test(v);
 function trackingNo() { return `REQ-${new Date().getFullYear()}-${crypto.randomBytes(4).toString('hex').toUpperCase()}`; }
 function publicRequest(row) { return { id: row.id, tracking_no: row.tracking_no, employee_number: row.employee_number, full_name: row.full_name, mobile: row.mobile, status: row.status, rejection_reason: row.rejection_reason, created_at: row.created_at, reviewed_at: row.reviewed_at }; }
+async function notifyAdmins(request) {
+  const current = await admin.from('app_state').select('data').eq('id', 'main').maybeSingle();
+  if (current.error || !current.data?.data) return;
+  const data = current.data.data;
+  const notifications = Array.isArray(data.notifications) ? [...data.notifications] : [];
+  notifications.unshift({
+    id: `N_AUTH_${request.id}`,
+    role: 'admin',
+    user_id: null,
+    referral_id: null,
+    title: 'طلب تسجيل موظف جديد',
+    message: `${request.full_name} (${request.employee_number}) — ${request.tracking_no}`,
+    type: 'user_registration',
+    read: false,
+    created_at: new Date().toISOString(),
+    from_user: 'النظام'
+  });
+  data.notifications = notifications.slice(0, 1000);
+  await admin.from('app_state').update({ data, updated_at: new Date().toISOString() }).eq('id', 'main');
+}
 
 module.exports = async function handler(req, res) {
   try {
@@ -30,6 +50,7 @@ module.exports = async function handler(req, res) {
       if (mobileTaken.data) return json(res, 409, { error: 'رقم الجوال مسجل مسبقاً' });
       const row = await admin.from('auth_requests').insert({ tracking_no: trackingNo(), employee_number, full_name, mobile }).select().single();
       if (row.error) throw row.error;
+      await notifyAdmins(row.data);
       return json(res, 201, { ok: true, request: publicRequest(row.data) });
     }
     const auth = await requireUser(req, { roles: ['admin'] });
