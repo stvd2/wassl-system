@@ -63,6 +63,24 @@ class Handler(SimpleHTTPRequestHandler):
             state.clear(); state.update(deepcopy(payload))
             self.reply(200, {'ok':True, 'revision':payload['meta']['sync_revision'], 'data':payload})
 
+    def do_POST(self):
+        path = urlparse(self.path)
+        body = self.rfile.read(int(self.headers.get('content-length', '0')))
+        if path.path != '/api/chat-clear': self.reply(404, {'error':'not found'}); return
+        payload = json.loads(body or b'{}')
+        with lock:
+            chat = next((c for c in state['chats'] if c['id'] == payload.get('chat_id')), None)
+            if not chat: self.reply(404, {'error':'not found'}); return
+            if payload.get('expected_revision') != state['meta']['sync_revision']:
+                self.reply(409, {'error':'conflict'}); return
+            ids = {str(a) for m in chat.get('messages', []) for a in m.get('atts', [])}
+            for aid, meta in list(state.get('attachments', {}).items()):
+                if str(meta.get('referral_id', '')).endswith(chat['id']): ids.add(str(aid))
+                if str(aid) in ids: state['attachments'].pop(aid, None); attachments.pop(str(aid), None)
+            count = len(chat.get('messages', [])); chat['messages'] = []; chat['reads'] = {}
+            state['meta']['sync_revision'] += 1
+            self.reply(200, {'ok':True, 'data':deepcopy(state), 'revision':state['meta']['sync_revision'], 'deletedAttachments':len(ids), 'messagesCleared':count})
+
 def main():
     global fail_put, fail_attachment
     server = ThreadingHTTPServer(('127.0.0.1', 0), partial(Handler, directory=str(ROOT / 'public')))
@@ -86,6 +104,7 @@ def main():
             assert page.locator('#modalRoot .section-modal').count() == 1, 'audit opens in section modal'
             page.evaluate("showPage('outgoing')")
             assert page.locator('#modalRoot .section-modal').count() == 1, 'referral list opens in section modal'
+            assert page.locator('#modalRoot button').filter(has_text='إحالة جديدة').count() == 0, 'create referral stays outside section modal'
             assert page.locator('#listWrap tbody tr').count() == 10, 'pagination first page'
             assert page.locator('nav[aria-label="صفحات الإحالات"]').count() == 1
             page.locator('select[aria-label="حجم صفحة الإحالات"]').select_option('25')
@@ -144,6 +163,11 @@ def main():
             fail_attachment = False
             assert 'رسالة واردة تجريبية' in page.locator('#chatMsgs').inner_text()
             assert page.locator('#chatMain').is_visible(), 'mobile chat stays visible'
+            page.once('dialog', lambda dialog: dialog.accept())
+            page.locator('[data-clear-chat="chat-1"]').click()
+            page.wait_for_function("DATA.chats.find(c=>c.id==='chat-1').messages.length === 0")
+            assert page.locator('[data-clear-chat="chat-1"]').count() == 1, 'cleared chat remains available'
+            assert 'لا رسائل' in page.locator('#chatMsgs').inner_text(), 'chat was cleared'
             merged = page.evaluate('''() => {
               const b=initData(); b.chats=[{id:'x',type:'direct',messages:[],reads:{}}];
               const r=structuredClone(b), l=structuredClone(b);
