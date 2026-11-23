@@ -2,6 +2,7 @@
 
 const crypto = require('node:crypto');
 const { createClient } = require('@supabase/supabase-js');
+const { requireUser } = require('./_auth');
 
 const STATE_ID = 'main';
 const BUCKET = 'attachments';
@@ -28,17 +29,6 @@ async function readJson(req) {
   }
   if (!chunks.length) return {};
   return JSON.parse(Buffer.concat(chunks).toString('utf8'));
-}
-
-function hashPassword(password, salt) {
-  let value = crypto.createHash('sha256').update(`${salt}::${password}`, 'utf8').digest('hex');
-  for (let i = 0; i < 500; i++) value = crypto.createHash('sha256').update(value + salt, 'utf8').digest('hex');
-  return value;
-}
-
-function safeEqual(a, b) {
-  if (typeof a !== 'string' || typeof b !== 'string' || a.length !== b.length) return false;
-  return crypto.timingSafeEqual(Buffer.from(a), Buffer.from(b));
 }
 
 function canonicalHash(data) {
@@ -77,22 +67,13 @@ module.exports = async function handler(req, res) {
     if (body.action !== 'cleanup_chat_attachments' || body.confirmed !== true || body.backupConfirmed !== true) {
       return send(res, 400, { error: 'يلزم تأكيد نطاق التنظيف والنسخة الاحتياطية' });
     }
-    const username = String(body.username || '').trim();
-    const password = String(body.password || '');
-    if (!username || !password) return send(res, 401, { error: 'بيانات اعتماد المدير مطلوبة' });
+    const auth = await requireUser(req, { roles: ['admin'] });
+    if (!auth.ok) return send(res, auth.status, { error: auth.error });
 
     const { data: row, error: readError } = await supabase.from('app_state').select('data').eq('id', STATE_ID).maybeSingle();
     if (readError) throw readError;
     const current = row?.data;
     if (!current?.meta || current.meta.version !== 'v6') return send(res, 500, { error: 'حالة النظام غير صالحة' });
-    const admin = (Array.isArray(current.users) ? current.users : []).find(u => u.username === username);
-    if (!admin || admin.role !== 'admin' || admin.active !== true || admin.rejected || admin.pending_approval) {
-      return send(res, 403, { error: 'التنظيف متاح لمدير النظام النشط فقط' });
-    }
-    if (!safeEqual(hashPassword(password, String(admin.salt || '')), String(admin.hash || ''))) {
-      return send(res, 403, { error: 'بيانات اعتماد مدير النظام غير صحيحة' });
-    }
-
     const revision = Number(current.meta.sync_revision || 0);
     const expectedRevision = Number(body.expectedRevision);
     if (!Number.isInteger(expectedRevision) || expectedRevision !== revision) {

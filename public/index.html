@@ -2662,14 +2662,12 @@ async function cleanChatAttachments() {
   if (!attachmentIds.length) return toast('لا توجد مرفقات محادثات للتنظيف؛ تم تنزيل نسخة احتياطية', 'ok');
   const confirmed = confirm(`تم إنشاء نسخة احتياطية محلية قبل الحذف.\n\nالنطاق: ${attachmentIds.length} مرفقاً من المحادثات فقط.\nسيتم حذف الملفات من Supabase Storage ونسخة IndexedDB المحلية، مع إبقاء الرسائل النصية والمحادثات والمستخدمين كما هي.\n\nهل تريد المتابعة؟`);
   if (!confirmed) return toast('تم إلغاء تنظيف المرفقات', 'warn');
-  const password = prompt('للتفويض الخادمي، أدخل كلمة مرور مدير النظام الحالية:');
-  if (password === null) return toast('تم إلغاء تنظيف المرفقات', 'warn');
   try {
     const res = await fetch(API_BASE + '/api/chat-attachments-cleanup', {
-      method: 'POST', cache: 'no-store', headers: { 'Content-Type': 'application/json' },
+      method: 'POST', cache: 'no-store', credentials: 'same-origin', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         action: 'cleanup_chat_attachments', confirmed: true, backupConfirmed: true,
-        username: CURRENT_USER.username, password, expectedRevision: revision,
+        expectedRevision: revision,
         backupHash, attachmentIds
       })
     });
