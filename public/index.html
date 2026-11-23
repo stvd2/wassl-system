@@ -628,6 +628,18 @@ async function attsGet(id) {
     req.onerror = () => rej(req.error);
   });
 }
+async function attsDelete(ids) {
+  const unique = [...new Set((ids || []).map(String).filter(Boolean))];
+  if (!unique.length) return;
+  const db = await openAttsDB();
+  await new Promise((res, rej) => {
+    const tx = db.transaction('attachments', 'readwrite');
+    const store = tx.objectStore('attachments');
+    unique.forEach(id => store.delete(id));
+    tx.oncomplete = () => res();
+    tx.onerror = () => rej(tx.error);
+  });
+}
 
 // ═══════════════════════════════════════════════════════════════════
 // التشفير SHA-256
@@ -2628,6 +2640,56 @@ async function purgeDatabaseSafe() {
   if (CURRENT_USER?.role !== 'admin') return toast('الحذف الكامل متاح لمدير النظام فقط', 'err');
   return toast('الحذف الشامل معطّل مؤقتاً إلى حين تطبيق صلاحيات إدارية موثقة على الخادم', 'warn');
 }
+async function cleanChatAttachments() {
+  if (CURRENT_USER?.role !== 'admin') return toast('التنظيف متاح لمدير النظام فقط', 'err');
+  const chatIds = new Set();
+  (DATA.chats || []).forEach(chat => {
+    (chat.messages || []).forEach(message => {
+      (message.atts || []).forEach(id => chatIds.add(String(id)));
+    });
+  });
+  Object.entries(DATA.attachments || {}).forEach(([id, meta]) => { if (String(meta?.referral_id || '').startsWith('chat-')) chatIds.add(id); });
+  const attachmentIds = [...chatIds].filter(id => /^[A-Za-z0-9_-]{1,120}$/.test(id)).sort();
+  const revision = Number(DATA.meta?.sync_revision || 0);
+  const backup = JSON.stringify(DATA);
+  const backupHash = SHA256(backup);
+  const backupName = `wasl-chat-attachments-backup-${new Date().toISOString().replace(/[:.]/g, '-')}.json`;
+  const backupBlob = new Blob([backup], { type: 'application/json;charset=utf-8' });
+  const backupUrl = URL.createObjectURL(backupBlob);
+  const backupLink = document.createElement('a');
+  backupLink.href = backupUrl; backupLink.download = backupName; document.body.appendChild(backupLink); backupLink.click(); backupLink.remove();
+  setTimeout(() => URL.revokeObjectURL(backupUrl), 1000);
+  if (!attachmentIds.length) return toast('لا توجد مرفقات محادثات للتنظيف؛ تم تنزيل نسخة احتياطية', 'ok');
+  const confirmed = confirm(`تم إنشاء نسخة احتياطية محلية قبل الحذف.\n\nالنطاق: ${attachmentIds.length} مرفقاً من المحادثات فقط.\nسيتم حذف الملفات من Supabase Storage ونسخة IndexedDB المحلية، مع إبقاء الرسائل النصية والمحادثات والمستخدمين كما هي.\n\nهل تريد المتابعة؟`);
+  if (!confirmed) return toast('تم إلغاء تنظيف المرفقات', 'warn');
+  const password = prompt('للتفويض الخادمي، أدخل كلمة مرور مدير النظام الحالية:');
+  if (password === null) return toast('تم إلغاء تنظيف المرفقات', 'warn');
+  try {
+    const res = await fetch(API_BASE + '/api/chat-attachments-cleanup', {
+      method: 'POST', cache: 'no-store', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        action: 'cleanup_chat_attachments', confirmed: true, backupConfirmed: true,
+        username: CURRENT_USER.username, password, expectedRevision: revision,
+        backupHash, attachmentIds
+      })
+    });
+    const result = await res.json().catch(() => ({}));
+    if (!res.ok || !result.ok) throw new Error(result.error || `فشل التنظيف (${res.status})`);
+    const deletedIds = result.deletedIds || [];
+    try { await attsDelete(deletedIds); } catch (e) { console.warn('[WASL] local attachment cleanup:', e); }
+    DATA = result.data;
+    LAST_REMOTE_REVISION = Number(DATA.meta?.sync_revision || result.revision || 0);
+    LOCAL_CHANGE_AT = DATA.meta?.local_updated_at || '';
+    _syncBlocked = false;
+    try { localStorage.setItem(STORAGE_KEY, JSON.stringify(DATA)); } catch (e) {}
+    audit('chat_attachments_cleaned', 'chat_attachments', 'all', `حذف ${result.deleted || 0} مرفقاً؛ فشل ${result.failed || 0}; النسخة ${revision}`);
+    toast(`✓ تم تنظيف ${result.deleted || 0} مرفق محادثة. الرسائل والمستخدمون محفوظون.`, result.failed ? 'warn' : 'ok');
+    showPage('db_monitor');
+  } catch (e) {
+    toast('تعذر تنظيف مرفقات المحادثات: ' + e.message, 'err');
+  }
+}
+
 function renderDbMonitor() {
   if (CURRENT_USER?.role !== 'admin') return showPage('dashboard');
   const sizeKb = new Blob([JSON.stringify(DATA || {})]).size / 1024;
@@ -2636,6 +2698,7 @@ function renderDbMonitor() {
   const rows = [['الإحالات', DATA.referrals.length],['المستخدمون', DATA.users.length],['الأسرة', DATA.beds.length],['المحادثات', DATA.chats.length],['المناوبات', DATA.shifts.length],['بيانات المرفقات', Object.keys(DATA.attachments || {}).length],['سجل التدقيق', DATA.audit.length],['الإشعارات', DATA.notifications.length]];
   $('content').innerHTML = `<div class="stats"><div class="stat"><label>إصدار الخادم</label><strong>${Number(DATA.meta?.sync_revision || 0)}</strong></div><div class="stat"><label>حجم الحالة التقريبي</label><strong>${sizeKb.toFixed(1)} KB</strong></div><div class="stat"><label>حالة المزامنة</label><strong>${_syncBlocked ? 'متعارضة' : 'Supabase'}</strong></div><div class="stat"><label>آخر تعديل محلي</label><strong style="font-size:12px;direction:ltr">${esc(DATA.meta?.local_updated_at || '—')}</strong></div></div>
     <div class="panel"><h3>📡 مراقبة القاعدة والسعة والمزامنة</h3><div class="notice info">المؤشر التالي تقديري لحجم حالة JSON مقارنة بحد إرشادي قدره ${FREE_QUOTA_KB.toLocaleString('en-US')} KB. لا يمثل قياس Supabase الكامل، ولا يتم حذف أو تصفير قاعدة الإنتاج تلقائياً.</div><div style="display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap"><b>${sizeKb.toFixed(1)} KB / ${FREE_QUOTA_KB.toLocaleString('en-US')} KB</b><span>${quotaPct}%</span></div><div class="quota-meter" aria-label="مؤشر سعة الحالة"><div class="quota-fill ${quotaClass}" style="width:${Math.max(2, quotaPct)}%"></div></div>${quotaPct >= 70 ? `<div class="notice ${quotaPct >= 90 ? 'danger' : 'warn'}">⚠️ اقترب حجم الحالة من الحد الإرشادي. صدّر نسخة JSON قبل أي عملية تنظيف.</div>` : ''}<div style="display:flex;gap:8px;flex-wrap:wrap"><button class="primary" onclick="syncNow()">🔄 مزامنة الآن</button><button class="secondary" onclick="exportStateJson()">⬇ تصدير JSON</button><button class="warn" disabled title="معلّق حتى تفعيل صلاحيات الخادم والاستيراد الآمن">⬆ استيراد JSON معلّق مؤقتًا</button></div><div class="twrap" style="margin-top:16px"><table class="t" style="min-width:520px"><thead><tr><th>المخزن</th><th>العدد</th></tr></thead><tbody>${rows.map(([k,v]) => `<tr><td><b>${esc(k)}</b></td><td dir="ltr">${Number(v).toLocaleString('en-US')}</td></tr>`).join('')}</tbody></table></div></div>
+    <div class="panel"><h3 style="color:var(--red)">🗑️ إدارة وتنظيف مرفقات المحادثات</h3><div class="notice warn">هذا القسم لمدير النظام فقط. يُنشئ النظام نسخة JSON محلية قبل الحذف، ثم يحذف مرفقات المحادثات المحددة فقط من Supabase Storage وIndexedDB، مع إبقاء الرسائل والمحادثات والمستخدمين والمرفقات خارج المحادثات.</div><div style="display:flex;gap:8px;align-items:center;justify-content:space-between;flex-wrap:wrap"><span>المرفقات المستهدفة: <b>${Object.entries(DATA.attachments || {}).filter(([id, meta]) => String(meta?.referral_id || '').startsWith('chat-') || (DATA.chats || []).some(c => (c.messages || []).some(m => (m.atts || []).includes(id)))).length}</b></span><button class="danger" onclick="cleanChatAttachments()">🗑️ تنظيف مرفقات المحادثات</button></div></div>
     <div class="panel"><h3 style="color:var(--red)">🧹 تنظيف الحالة التشغيلية</h3><div class="notice danger">هذه العمليات تكتب حالة جديدة إلى Supabase بعد تأكيدين صريحين. الحسابات وكلمات المرور والمرفقات لا تُحذف في التنظيف التشغيلي.</div><div style="display:flex;gap:8px;flex-wrap:wrap"><button class="warn" onclick="resetOperationalDataSafe()">مسح البيانات التشغيلية وتصفير العدادات</button><button class="danger" onclick="freshResetSystemSafe()">إعادة الحالة التشغيلية للبداية</button></div></div>
     <div class="panel" style="border:2px solid var(--red)"><h3 style="color:var(--red)">⚠ حذف كامل لقاعدة الإنتاج والمرفقات</h3><div class="notice danger">الحذف الشامل معطّل مؤقتاً حتى تطبيق مصادقة وصلاحيات إدارية على الخادم، والتحقق من جميع ملفات التخزين والنسخ الاحتياطية. لم تُحذف أي بيانات.</div><button class="danger" disabled aria-disabled="true">الحذف الشامل غير متاح مؤقتاً</button></div>`;
 }
