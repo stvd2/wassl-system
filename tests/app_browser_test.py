@@ -81,6 +81,10 @@ def main():
             page.evaluate("showPage('outgoing')")
             assert page.locator('#listWrap tbody tr').count() == 10, 'pagination first page'
             assert page.locator('nav[aria-label="صفحات الإحالات"]').count() == 1
+            page.locator('select[aria-label="حجم صفحة الإحالات"]').select_option('25')
+            assert page.locator('#listWrap tbody tr').count() == 25, 'pagination page size 25'
+            assert 'إجمالي 25 سجل' in page.locator('nav[aria-label="صفحات الإحالات"]').inner_text()
+            page.locator('select[aria-label="حجم صفحة الإحالات"]').select_option('10')
             page.locator('nav[aria-label="صفحات الإحالات"] button').filter(has_text='2').click()
             assert page.locator('#listWrap tbody tr').count() == 10, 'pagination second page'
             assert page.locator('#listWrap tbody tr').first.locator('td').count() == 8, 'row markup'
@@ -89,11 +93,17 @@ def main():
             page.evaluate('closeModal()')
             page.wait_for_function('LOCAL_CHANGE_SERIAL === CONFIRMED_CHANGE_SERIAL && !_syncBlocked', timeout=15000)
             page.evaluate("showPage('create')")
+            assert page.locator('#modalRoot .modal').count() == 1, 'create referral opens in modal'
+            assert page.locator('#createReferralTitle').inner_text() == '📋 إحالة جديدة'
+            assert page.locator('#modalRoot button[aria-label="إغلاق نموذج الإحالة"]').count() == 1, 'modal close button'
+            assert page.locator('#modalRoot .modal').evaluate('(x) => x.scrollHeight > x.clientHeight'), 'modal scrolls internally'
             page.locator('#createForm [name=patient_name]').fill('مسودة لا يجب فقدها')
             with lock:
                 state['meta']['sync_revision'] += 1; state['meta']['local_updated_at'] = '2027-01-01T00:00:00.000Z'
             page.evaluate('refreshFromRealtime()')
             assert page.locator('#createForm [name=patient_name]').input_value() == 'مسودة لا يجب فقدها'
+            page.evaluate('closeModal()')
+            assert page.locator('#modalRoot .modal').count() == 0, 'create modal closes safely'
             page.evaluate("CURRENT_CHAT='chat-1'; CHAT_TAB='direct'; showPage('chat'); openChat('chat-1')")
             page.wait_for_function('LOCAL_CHANGE_SERIAL === CONFIRMED_CHANGE_SERIAL && !_syncBlocked', timeout=15000)
             page.locator('#chatText').fill('مسودة رسالة محفوظة')

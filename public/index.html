@@ -8,7 +8,7 @@
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <style>
 :root{--navy:#123047;--teal:#087f78;--bg:#f3f6f8;--card:#fff;--text:#20313d;--muted:#70818c;--line:#e4eaee;--red:#c44747;--green:#17845b;--amber:#a66b12;--purple:#6c4ab0;--shadow:0 8px 28px rgba(20,48,65,.07)}
-*{box-sizing:border-box}body{margin:0;overflow-x:clip;background:var(--bg);font-family:"Segoe UI",Tahoma,Arial,sans-serif;color:var(--text);font-size:14px;line-height:1.5}
+*{box-sizing:border-box}html{overflow-x:clip;overscroll-behavior-x:none}body{margin:0;overflow-x:clip;overscroll-behavior-x:none;background:var(--bg);font-family:"Segoe UI",Tahoma,Arial,sans-serif;color:var(--text);font-size:14px;line-height:1.5}
 button{cursor:pointer;border:0;border-radius:10px;padding:10px 16px;font-weight:700;font:inherit;transition:all .15s}
 .primary{background:var(--teal);color:#fff}.primary:hover{background:#066d67}.primary:disabled{opacity:.5;cursor:not-allowed}
 .success{background:var(--green);color:#fff}.success:hover{background:#0f6b48}
@@ -68,8 +68,11 @@ table.t tr:hover td{background:#fafcfc}
 .p-cons{background:#F1F5F6;color:#344B52;border:1px solid #D7E0E3}
 .p-new{background:#e0f2fe;color:#0369a1;font-size:10px;padding:3px 8px}
 .grid2{display:grid;grid-template-columns:repeat(2,1fr);gap:0 16px}.full{grid-column:1/-1}
-.modal-back{position:fixed;inset:0;background:#0b2536a8;display:grid;place-items:center;padding:18px;z-index:20;backdrop-filter:blur(2px)}
-.modal{background:#fff;width:min(920px,100%);max-height:92vh;overflow:auto;border-radius:16px;padding:24px}
+.modal-back{position:fixed;inset:0;background:#0b2536a8;display:grid;place-items:center;padding:max(12px,env(safe-area-inset-top)) max(12px,env(safe-area-inset-right)) max(12px,env(safe-area-inset-bottom)) max(12px,env(safe-area-inset-left));z-index:20;backdrop-filter:blur(2px);overscroll-behavior:contain}
+.modal{background:#fff;width:min(920px,100%);max-height:calc(100dvh - 24px);overflow-y:auto;overflow-x:hidden;border-radius:16px;padding:24px;overscroll-behavior:contain;-webkit-overflow-scrolling:touch}
+body.modal-open{overflow:hidden;position:fixed;width:100%;touch-action:none}
+body.modal-open .modal{touch-action:auto}
+.modal form{padding-bottom:max(4px,env(safe-area-inset-bottom))}
 .mh{display:flex;justify-content:space-between;align-items:center;margin-bottom:18px;padding-bottom:14px;border-bottom:1px solid var(--line);gap:12px;flex-wrap:wrap}
 .mh h3{margin:0;color:var(--navy);font-size:18px}
 .dgrid{display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin-bottom:16px}
@@ -238,7 +241,7 @@ input[dir="ltr"],select[dir="ltr"],textarea[dir="ltr"],.ltr{direction:ltr;text-a
   aside .nav{width:auto;white-space:nowrap;padding:9px 14px;flex:none}
   .stats{grid-template-columns:repeat(2,1fr)}
   main{min-width:0;overflow-x:hidden;padding-bottom:88px}
-  .chat-wrap{grid-template-columns:1fr;height:calc(100dvh - 66px - 100px - 68px);min-height:300px}
+  .chat-wrap{grid-template-columns:1fr;height:calc(var(--viewport-height, 100dvh) - 66px - 100px - 68px);min-height:300px}
   .chat-side{display:none}
   .chat-side.show{display:flex}
   .chat-main{display:none;min-width:0}
@@ -251,7 +254,9 @@ input[dir="ltr"],select[dir="ltr"],textarea[dir="ltr"],.ltr{direction:ltr;text-a
   .mobile-bottom-nav .bn-count{font-size:9px;background:var(--red);color:#fff;border-radius:9px;padding:1px 5px;margin-inline-start:3px}
 }
 @media(max-width:600px){
-  main{padding:14px;padding-bottom:88px}
+  .modal{width:100%;max-height:calc(var(--viewport-height,100dvh) - 18px);padding:16px}
+  .modal .mh{position:sticky;top:-16px;background:#fff;padding-top:2px;z-index:1}
+  main{padding:14px;padding-bottom:calc(88px + env(safe-area-inset-bottom))}
   .grid2{grid-template-columns:1fr}
   .dgrid{grid-template-columns:1fr 1fr}
   .ph h2{font-size:20px}
@@ -381,7 +386,14 @@ let LOCAL_CHANGE_SERIAL = 0;
 let CONFIRMED_CHANGE_SERIAL = 0;
 let RECOVERED_SYNC_ERROR = '';
 let LIST_PAGE = 1;
-const LIST_PAGE_SIZE = 10;
+let LIST_PAGE_SIZE = 10;
+let AUDIT_PAGE = 1;
+let AUDIT_PAGE_SIZE = 25;
+let AUDIT_QUERY = '';
+let CREATE_MODAL_ACTIVE = false;
+let CREATE_SUBMITTING = false;
+let CREATE_RETURN_PAGE = 'outgoing';
+let MODAL_SCROLL_Y = 0;
 let LIST_QUERY = '';
 let LIST_STATUS = '';
 let LIST_TYPE = '';
@@ -1795,6 +1807,7 @@ function updateMobileBottomNav() {
   if (notifCount) { notifCount.textContent = notifs; notifCount.classList.toggle('hidden', !notifs); }
 }
 function showPage(p) {
+  if (p === 'create') return openCreateReferralModal();
   if (p === 'transport' || p === 'return_pending' || p === 'bed_awaiting_arrival') {
     if (CURRENT_USER.role === 'doctor') p = 'doctor_inbox';
     else if (CURRENT_USER.role === 'beds') p = 'bed_requests';
@@ -1855,7 +1868,7 @@ function showPage(p) {
 
 function renderPage(p) {
   if (p === 'dashboard') return renderDashboard();
-  if (p === 'create') return renderCreate();
+  if (p === 'create') return openCreateReferralModal();
   if (p === 'users') return renderUsers();
   if (p === 'audit') return renderAudit();
   if (p === 'db_monitor') return renderDbMonitor();
@@ -1938,20 +1951,22 @@ function renderList(p) {
   if (LIST_STATUS) list = list.filter(r => r.status === LIST_STATUS);
   if (LIST_TYPE) list = list.filter(r => r.priority === LIST_TYPE);
   if (LIST_DEPT) list = list.filter(r => (r.target_specialty || r.specialty) === LIST_DEPT);
-  const totalPages = Math.max(1, Math.ceil(list.length / LIST_PAGE_SIZE));
+  const totalRecords = list.length;
+  const totalPages = Math.max(1, Math.ceil(totalRecords / LIST_PAGE_SIZE));
   LIST_PAGE = Math.min(Math.max(1, LIST_PAGE), totalPages);
   const visible = list.slice((LIST_PAGE - 1) * LIST_PAGE_SIZE, LIST_PAGE * LIST_PAGE_SIZE);
   const pageNumbers = Array.from(new Set([1, totalPages, ...Array.from({ length: 5 }, (_, i) => LIST_PAGE + i - 2).filter(n => n >= 1 && n <= totalPages)])).sort((a, b) => a - b);
   const pageButtons = pageNumbers.map((n, i) => `${i && n - pageNumbers[i - 1] > 1 ? '<span>…</span>' : ''}<button class="${n === LIST_PAGE ? 'primary' : 'ghost'} sm" onclick="setListPage(${n})" ${n === LIST_PAGE ? 'aria-current="page"' : ''}>${n}</button>`).join('');
   $('content').innerHTML = `<div class="panel">
-    <h3>القائمة (${list.length})</h3>
-    <div class="grid2" style="margin-bottom:14px"><input class="searchbox" value="${esc(LIST_QUERY)}" placeholder="بحث..." oninput="setListQuery(this.value, '${p}')"><select onchange="setListFilter('status',this.value,'${p}')"><option value="">كل الحالات</option>${Object.entries(STATES).map(([key,val]) => `<option value="${esc(key)}" ${LIST_STATUS === key ? 'selected' : ''}>${esc(val.label)}</option>`).join('')}</select><select onchange="setListFilter('type',this.value,'${p}')"><option value="">كل الأنواع</option>${REFERRAL_TYPES.map(type => `<option value="${esc(type)}" ${LIST_TYPE === type ? 'selected' : ''}>${esc(type)}</option>`).join('')}</select><select onchange="setListFilter('dept',this.value,'${p}')"><option value="">كل التخصصات</option>${DEPARTMENTS.map(dept => `<option value="${esc(dept)}" ${LIST_DEPT === dept ? 'selected' : ''}>${esc(dept)}</option>`).join('')}</select></div>
+    <h3>القائمة (${totalRecords})</h3>
+    <div class="grid2" style="margin-bottom:14px"><input class="searchbox" value="${esc(LIST_QUERY)}" placeholder="بحث..." oninput="setListQuery(this.value, '${p}')"><select onchange="setListFilter('status',this.value,'${p}')"><option value="">كل الحالات</option>${Object.entries(STATES).map(([key,val]) => `<option value="${esc(key)}" ${LIST_STATUS === key ? 'selected' : ''}>${esc(val.label)}</option>`).join('')}</select><select onchange="setListFilter('type',this.value,'${p}')"><option value="">كل الأنواع</option>${REFERRAL_TYPES.map(type => `<option value="${esc(type)}" ${LIST_TYPE === type ? 'selected' : ''}>${esc(type)}</option>`).join('')}</select><select onchange="setListFilter('dept',this.value,'${p}')"><option value="">كل التخصصات</option>${DEPARTMENTS.map(dept => `<option value="${esc(dept)}" ${LIST_DEPT === dept ? 'selected' : ''}>${esc(dept)}</option>`).join('')}</select><label style="display:flex;align-items:center;gap:8px;color:var(--muted);font-size:12px">عرض <select aria-label="حجم صفحة الإحالات" onchange="setListPageSize(this.value,'${p}')">${[10,25,50,100].map(n => `<option value="${n}" ${LIST_PAGE_SIZE === n ? 'selected' : ''}>${n} صف</option>`).join('')}</select></label></div>
     <div id="listWrap">${tableHTML(visible)}</div>
-    ${totalPages > 1 ? `<nav aria-label="صفحات الإحالات" style="display:flex;gap:6px;align-items:center;justify-content:center;margin-top:16px;flex-wrap:wrap"><button class="secondary sm" onclick="setListPage(${Math.max(1, LIST_PAGE - 1)})" ${LIST_PAGE <= 1 ? 'disabled' : ''}>السابق</button>${pageButtons}<button class="secondary sm" onclick="setListPage(${Math.min(totalPages, LIST_PAGE + 1)})" ${LIST_PAGE >= totalPages ? 'disabled' : ''}>التالي</button><span style="font-size:12px;color:var(--muted)">صفحة ${LIST_PAGE} من ${totalPages}</span></nav>` : ''}
+    <nav aria-label="صفحات الإحالات" style="display:flex;gap:6px;align-items:center;justify-content:center;margin-top:16px;flex-wrap:wrap"><button class="secondary sm" onclick="setListPage(${Math.max(1, LIST_PAGE - 1)})" ${LIST_PAGE <= 1 ? 'disabled' : ''}>السابق</button>${pageButtons}<button class="secondary sm" onclick="setListPage(${Math.min(totalPages, LIST_PAGE + 1)})" ${LIST_PAGE >= totalPages ? 'disabled' : ''}>التالي</button><span style="font-size:12px;color:var(--muted)">صفحة ${LIST_PAGE} من ${totalPages} — إجمالي ${totalRecords} سجل</span></nav>
   </div>`;
 }
 
 function setListPage(page) { LIST_PAGE = Math.max(1, Number(page) || 1); renderList(PAGE); }
+function setListPageSize(size, page) { LIST_PAGE_SIZE = Math.min(100, Math.max(1, Number(size) || 10)); LIST_PAGE = 1; renderList(page || PAGE); }
 function setListQuery(value, page) { LIST_QUERY = String(value || ''); LIST_PAGE = 1; renderList(page || PAGE); }
 function setListFilter(kind, value, page) { if (kind === 'status') LIST_STATUS = value; if (kind === 'type') LIST_TYPE = value; if (kind === 'dept') LIST_DEPT = value; LIST_PAGE = 1; renderList(page || PAGE); }
 
@@ -2049,9 +2064,20 @@ function syncConsultOptions() {
   });
 }
 
-function renderCreate() {
-  if (!['coordinator', 'admin'].includes(CURRENT_USER.role)) return toast('غير مصرح', 'err');
-  $('content').innerHTML = `<div class="panel"><h3>📋 بيانات الإحالة الجديدة</h3>
+function lockModalBody() {
+  MODAL_SCROLL_Y = window.scrollY || document.documentElement.scrollTop || 0;
+  document.body.classList.add('modal-open');
+}
+function unlockModalBody() {
+  document.body.classList.remove('modal-open');
+  window.scrollTo(0, MODAL_SCROLL_Y);
+}
+function openCreateReferralModal() {
+  if (!['coordinator', 'admin'].includes(CURRENT_USER?.role)) return toast('غير مصرح', 'err');
+  CREATE_RETURN_PAGE = PAGE === 'create' ? 'outgoing' : PAGE;
+  CREATE_MODAL_ACTIVE = true;
+  lockModalBody();
+  $('modalRoot').innerHTML = `<div class="modal-back" role="dialog" aria-modal="true" aria-labelledby="createReferralTitle" onclick="if(event.target===this&&!CREATE_SUBMITTING)closeModal()"><div class="modal create-referral-modal"><div class="mh"><h3 id="createReferralTitle">📋 إحالة جديدة</h3><button class="ghost sm" type="button" aria-label="إغلاق نموذج الإحالة" onclick="closeModal()">✕ إغلاق</button></div>
     <form onsubmit="submitReferral(event)" class="grid2" id="createForm">
       <div class="field"><label>اسم المريض *</label><input name="patient_name" required></div>
       <div class="field"><label>رقم الملف الطبي *</label><input name="mrn" required></div>
@@ -2061,36 +2087,19 @@ function renderCreate() {
       <div class="field"><label>رقم الهوية</label><input name="national_id"></div>
       <div class="field"><label>المستشفى المُحيل *</label><input name="from_hospital" required value="مستشفى الملك فيصل بمكة"></div>
       <div class="field"><label>المستشفى المحال إليه *</label><input name="to_hospital" required></div>
-      <div class="field"><label>القسم النهائي (المحطة الأخيرة للقرار) *</label>
-        <select name="target_specialty" id="targetSpecialtySel" required onchange="syncConsultOptions()"><option value="">— اختر القسم —</option>${DEPARTMENTS.map(d => `<option value="${esc(d)}">${esc(d)}</option>`).join('')}</select>
-      </div>
-      <div class="field"><label>الأقسام المستشارة أولاً (تُعرض عليها قبل القسم النهائي)</label>
-        <div id="consultDeptsSel" class="checkbox-grid" role="group" aria-label="الأقسام المستشارة">
-          ${DEPARTMENTS.map(d => `<label class="check-card"><input type="checkbox" name="departments" value="${esc(d)}" onchange="syncConsultOptions()"><span>${esc(d)}</span></label>`).join('')}
-        </div>
-        <small style="color:var(--muted);font-size:11px">حدد قسمًا أو عدة أقسام — لا يمكن تحديد القسم النهائي نفسه</small>
-      </div>
-      <div class="field"><label>نوع الإحالة *</label>
-        <select name="priority" required>
-          <option value="">— اختر —</option>
-          <option value="طارئ">🚨 طارئ</option>
-          <option value="تنويم عادي">🛏 تنويم عادي</option>
-          <option value="عيادات">🏥 عيادات</option>
-          <option value="استشارة طبية">📋 استشارة طبية</option>
-        </select>
-      </div>
+      <div class="field"><label>القسم النهائي (المحطة الأخيرة للقرار) *</label><select name="target_specialty" id="targetSpecialtySel" required onchange="syncConsultOptions()"><option value="">— اختر القسم —</option>${DEPARTMENTS.map(d => `<option value="${esc(d)}">${esc(d)}</option>`).join('')}</select></div>
+      <div class="field"><label>الأقسام المستشارة أولاً</label><div id="consultDeptsSel" class="checkbox-grid" role="group" aria-label="الأقسام المستشارة">${DEPARTMENTS.map(d => `<label class="check-card"><input type="checkbox" name="departments" value="${esc(d)}" onchange="syncConsultOptions()"><span>${esc(d)}</span></label>`).join('')}</div><small style="color:var(--muted);font-size:11px">لا يمكن تحديد القسم النهائي نفسه</small></div>
+      <div class="field"><label>نوع الإحالة *</label><select name="priority" required><option value="">— اختر —</option><option value="طارئ">🚨 طارئ</option><option value="تنويم عادي">🛏 تنويم عادي</option><option value="عيادات">🏥 عيادات</option><option value="استشارة طبية">📋 استشارة طبية</option></select></div>
       <div class="field"><label>عكسية؟</label><select name="is_reverse"><option>لا</option><option>نعم</option></select></div>
       <div class="field full"><label>التشخيص / سبب الإحالة *</label><textarea name="diagnosis" required></textarea></div>
       <div class="field full"><label>ملاحظات</label><textarea name="notes"></textarea></div>
-      <div class="field full">
-        <label>📎 المرفقات <span style="color:var(--teal);font-weight:700">(صور و PDF فقط)</span></label>
-        <input type="file" name="files" multiple accept="image/*,application/pdf" onchange="updateFileInfo(this)">
-        <div id="fileInfo" class="storage-info" style="display:none"></div>
-      </div>
+      <div class="field full"><label>📎 المرفقات <span style="color:var(--teal);font-weight:700">(صور و PDF فقط)</span></label><input type="file" name="files" multiple accept="image/*,application/pdf" onchange="updateFileInfo(this)"><div id="fileInfo" class="storage-info" style="display:none"></div></div>
       <div class="full"><button class="primary" type="submit" id="submitBtn" style="width:100%;padding:14px">📤 حفظ وإرسال للطبيب</button></div>
-    </form>
-  </div>`;
+    </form></div></div>`;
+  const first = $('createForm')?.querySelector('input,select,textarea');
+  if (first) setTimeout(() => first.focus({preventScroll:true}), 0);
 }
+function renderCreate() { return openCreateReferralModal(); }
 
 function updateFileInfo(input) {
   const info = $('fileInfo');
@@ -2119,6 +2128,7 @@ async function submitReferral(e) {
     if (DATA.referrals.some(r => (r.ref_no || '').trim() === refNo && !STATES[r.status]?.terminal)) {
       toast(`رقم "${refNo}" مستخدم`, 'err'); return;
     }
+    CREATE_SUBMITTING = true;
     try { await openAttsDB(); } catch (dbErr) { console.warn('[WASL] تعذر التخزين المحلي للمرفقات:', dbErr.message); }
     const id = 'WS-' + new Date().getFullYear() + '-' + uid();
     const stagedAttachments = {};
@@ -2163,11 +2173,14 @@ async function submitReferral(e) {
     } else {
       DATA.users.filter(u => u.role === 'doctor' && u.active && u.department === targetSpecialty).forEach(u => notifyUser(u.id, id, '🩺 إحالة جديدة بانتظار قرارك النهائي (القبول أو الرفض)'));
     }
-    if (!saveData()) return;
+    if (!saveData()) { CREATE_SUBMITTING = false; return; }
     audit('referral_created', 'referral', id, `${refNo} — ${d.patient_name} — نهائي:${targetSpecialty}`);
     toast(`✓ تم إنشاء ${refNo}`, 'ok');
+    CREATE_SUBMITTING = false;
+    closeModal();
     showPage('outgoing');
   } catch (err) {
+    CREATE_SUBMITTING = false;
     if (submitBtn) { submitBtn.disabled = false; submitBtn.textContent = '📤 حفظ وإرسال للطبيب'; }
     toast(err.message, 'err');
   }
@@ -2306,7 +2319,18 @@ function fileIcon(t) {
   return '📄';
 }
 
-function closeModal() { $('modalRoot').innerHTML = ''; }
+function closeModal() {
+  if (CREATE_MODAL_ACTIVE && CREATE_SUBMITTING) return toast('انتظر اكتمال حفظ الإحالة أو رفع المرفقات', 'warn');
+  const wasCreate = CREATE_MODAL_ACTIVE;
+  CREATE_MODAL_ACTIVE = false;
+  CREATE_SUBMITTING = false;
+  $('modalRoot').innerHTML = '';
+  if (wasCreate) { unlockModalBody(); if (PAGE === 'create') { PAGE = CREATE_RETURN_PAGE || 'outgoing'; localStorage.setItem(PAGE_SESSION_KEY, PAGE); buildNav(); } }
+}
+document.addEventListener('keydown', e => { if (e.key === 'Escape' && $('modalRoot')?.firstElementChild) closeModal(); });
+window.addEventListener('resize', () => { const h = window.visualViewport?.height || window.innerHeight; document.documentElement.style.setProperty('--viewport-height', h + 'px'); });
+if (window.visualViewport) window.visualViewport.addEventListener('resize', () => { document.documentElement.style.setProperty('--viewport-height', window.visualViewport.height + 'px'); });
+document.documentElement.style.setProperty('--viewport-height', (window.visualViewport?.height || window.innerHeight) + 'px');
 
 // ═══════════════════════════════════════════════════════════════════
 // الإجراءات
@@ -3146,11 +3170,19 @@ function deleteUser(id) {
 }
 function renderAudit() {
   if (CURRENT_USER.role !== 'admin') return;
-  const logs = DATA.audit.slice(0, 200);
+  const allLogs = DATA.audit.slice(0, 200);
+  const q = AUDIT_QUERY.trim().toLowerCase();
+  const filteredLogs = q ? allLogs.filter(l => [l.user,l.role,l.action,l.entity_id].filter(Boolean).join(' ').toLowerCase().includes(q)) : allLogs;
+  const totalPages = Math.max(1, Math.ceil(filteredLogs.length / AUDIT_PAGE_SIZE));
+  AUDIT_PAGE = Math.min(Math.max(1, AUDIT_PAGE), totalPages);
+  const logs = filteredLogs.slice((AUDIT_PAGE - 1) * AUDIT_PAGE_SIZE, AUDIT_PAGE * AUDIT_PAGE_SIZE);
   const rows = logs.map(l => `<tr><td style="font-size:11.5px">${fmtDate(l.ts)}</td><td>${esc(l.user)}</td><td>${esc(l.role)}</td><td><span class="pill">${esc(l.action)}</span></td><td style="font-size:11.5px">${esc(l.entity_id || '—')}</td></tr>`).join('');
-  $('content').innerHTML = `<div class="panel"><div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap"><h3 style="margin:0">سجل التدقيق (${logs.length})</h3><button class="danger xs" onclick="deleteAllAudit()">🗑 حذف الكل</button></div><div class="twrap"><table class="t" style="min-width:700px"><thead><tr><th>التاريخ</th><th>المستخدم</th><th>الدور</th><th>العملية</th><th>الكيان</th></tr></thead><tbody>${rows}</tbody></table></div></div>`;
+  $('content').innerHTML = `<div class="panel"><div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap"><h3 style="margin:0">سجل التدقيق (${filteredLogs.length})</h3><button class="danger xs" onclick="deleteAllAudit()">🗑 حذف الكل</button></div><div class="grid2" style="margin:14px 0"><input value="${esc(AUDIT_QUERY)}" placeholder="بحث في السجل..." oninput="setAuditQuery(this.value)"><label style="display:flex;align-items:center;gap:8px;color:var(--muted);font-size:12px">عرض <select aria-label="حجم صفحة سجل التدقيق" onchange="setAuditPageSize(this.value)">${[10,25,50,100].map(n => `<option value="${n}" ${AUDIT_PAGE_SIZE===n?'selected':''}>${n} صف</option>`).join('')}</select></label></div><div class="twrap"><table class="t" style="min-width:700px"><thead><tr><th>التاريخ</th><th>المستخدم</th><th>الدور</th><th>العملية</th><th>الكيان</th></tr></thead><tbody>${rows || '<tr><td colspan="5"><div class="empty">لا توجد سجلات</div></td></tr>'}</tbody></table></div><nav aria-label="صفحات سجل التدقيق" style="display:flex;gap:6px;align-items:center;justify-content:center;margin-top:16px;flex-wrap:wrap"><button class="secondary sm" onclick="setAuditPage(${Math.max(1,AUDIT_PAGE-1)})" ${AUDIT_PAGE<=1?'disabled':''}>السابق</button><span style="font-size:12px;color:var(--muted)">صفحة ${AUDIT_PAGE} من ${totalPages} — إجمالي ${filteredLogs.length} سجل</span><button class="secondary sm" onclick="setAuditPage(${Math.min(totalPages,AUDIT_PAGE+1)})" ${AUDIT_PAGE>=totalPages?'disabled':''}>التالي</button></nav></div>`;
 }
 
+function setAuditPage(page) { AUDIT_PAGE = Math.max(1, Number(page) || 1); renderAudit(); }
+function setAuditPageSize(size) { AUDIT_PAGE_SIZE = Math.min(100, Math.max(1, Number(size) || 25)); AUDIT_PAGE = 1; renderAudit(); }
+function setAuditQuery(value) { AUDIT_QUERY = String(value || ''); AUDIT_PAGE = 1; renderAudit(); }
 function deleteAllAudit() {
   if (CURRENT_USER?.role !== 'admin') return toast('متاح لمدير النظام فقط', 'err');
   if (!confirm('حذف جميع سجلات التدقيق نهائيًا؟')) return;
