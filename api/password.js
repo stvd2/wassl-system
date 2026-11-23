@@ -3,8 +3,11 @@ const { admin, requireUser } = require('./_auth');
 const json = (res, status, body) => { res.setHeader('Cache-Control', 'no-store'); return res.status(status).json(body); };
 function validPassword(value, employee) {
   const p = String(value || '');
-  if (p.length < 12 || p.length > 128) return 'كلمة المرور يجب أن تكون بين 12 و128 رمزاً';
-  if (!/[A-Za-z]/.test(p) || !/[0-9]/.test(p)) return 'يجب أن تحتوي كلمة المرور على حرف ورقم';
+  if (p.length < 8 || p.length > 128) return 'كلمة المرور يجب أن تكون بين 8 و128 رمزاً';
+  if (!/[A-Z]/.test(p)) return 'يجب أن تحتوي كلمة المرور على حرف إنجليزي كبير';
+  if (!/[a-z]/.test(p)) return 'يجب أن تحتوي كلمة المرور على حرف إنجليزي صغير';
+  if (!/[0-9]/.test(p)) return 'يجب أن تحتوي كلمة المرور على رقم';
+  if (/^\s|\s$/.test(p)) return 'لا تبدأ أو تنتهي كلمة المرور بمسافة';
   if (employee && p.toLowerCase().includes(String(employee).toLowerCase())) return 'لا تستخدم رقم الموظف داخل كلمة المرور';
   return '';
 }

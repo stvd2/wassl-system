@@ -8,7 +8,7 @@
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <style>
 :root{--navy:#123047;--teal:#087f78;--bg:#f3f6f8;--card:#fff;--text:#20313d;--muted:#70818c;--line:#e4eaee;--red:#c44747;--green:#17845b;--amber:#a66b12;--purple:#6c4ab0;--shadow:0 8px 28px rgba(20,48,65,.07)}
-*{box-sizing:border-box}body{margin:0;background:var(--bg);font-family:"Segoe UI",Tahoma,Arial,sans-serif;color:var(--text);font-size:14px;line-height:1.5}
+*{box-sizing:border-box}body{margin:0;overflow-x:clip;background:var(--bg);font-family:"Segoe UI",Tahoma,Arial,sans-serif;color:var(--text);font-size:14px;line-height:1.5}
 button{cursor:pointer;border:0;border-radius:10px;padding:10px 16px;font-weight:700;font:inherit;transition:all .15s}
 .primary{background:var(--teal);color:#fff}.primary:hover{background:#066d67}.primary:disabled{opacity:.5;cursor:not-allowed}
 .success{background:var(--green);color:#fff}.success:hover{background:#0f6b48}
@@ -30,9 +30,9 @@ textarea{min-height:90px;resize:vertical}
 .brand h1{margin:0;font-size:27px;color:var(--navy)}.brand p{margin:2px 0;color:var(--muted);font-size:12px}
 .field{display:grid;gap:7px;margin:14px 0}.field label{font-size:13px;font-weight:700;color:#435560}
 .hint{background:#f1f7f7;border:1px solid #dcebea;border-radius:10px;padding:12px;font-size:11.5px;color:#52666e;line-height:1.9;margin-top:16px}
-.top{height:66px;background:#fff;border-bottom:1px solid var(--line);display:flex;align-items:center;justify-content:space-between;padding:0 24px;position:sticky;top:0;z-index:10;box-shadow:0 1px 3px rgba(0,0,0,.04)}
-.tl{display:flex;align-items:center;gap:12px}.mini{width:36px;height:36px;border-radius:10px;background:var(--teal);color:#fff;display:grid;place-items:center;font-weight:900}
-.ur{display:flex;align-items:center;gap:12px}.av{width:38px;height:38px;border-radius:50%;background:#e4f2f0;color:var(--teal);display:grid;place-items:center;font-weight:800}
+.top{min-height:66px;height:auto;background:#fff;border-bottom:1px solid var(--line);display:flex;align-items:center;justify-content:space-between;padding:0 24px;position:sticky;top:0;z-index:10;box-shadow:0 1px 3px rgba(0,0,0,.04)}
+.tl{display:flex;align-items:center;gap:12px;min-width:0}.mini{width:36px;height:36px;border-radius:10px;background:var(--teal);color:#fff;display:grid;place-items:center;font-weight:900}
+.ur{display:flex;align-items:center;gap:12px;min-width:0}.av{width:38px;height:38px;border-radius:50%;background:#e4f2f0;color:var(--teal);display:grid;place-items:center;font-weight:800}
 .notif-btn{position:relative;background:#f2f5f7;color:#435560;padding:9px 13px;border-radius:10px;font-size:18px}
 .notif-btn:hover{background:#e6ecf0}
 .notif-btn .badge{position:absolute;top:-4px;right:-4px;background:var(--red);color:#fff;font-size:10px;font-weight:700;padding:2px 6px;border-radius:10px;min-width:18px;text-align:center}
@@ -144,7 +144,7 @@ table.t tr:hover td{background:#fafcfc}
 .cons-box .cons-section p{margin:0;line-height:1.7;font-size:13px;color:var(--text);white-space:pre-wrap}
 
 /* ═══════ الدردشة ═══════ */
-.chat-wrap{display:grid;grid-template-columns:300px 1fr;height:calc(100vh - 66px - 100px);background:#fff;border-radius:14px;overflow:hidden;box-shadow:var(--shadow);border:1px solid var(--line)}
+.chat-wrap{display:grid;grid-template-columns:300px 1fr;height:calc(100dvh - 66px - 100px);min-height:320px;background:#fff;border-radius:14px;overflow:hidden;box-shadow:var(--shadow);border:1px solid var(--line)}
 .chat-side{background:#f7f9fa;border-left:1px solid var(--line);overflow-y:auto;display:flex;flex-direction:column}
 .chat-head{padding:12px 14px;border-bottom:1px solid var(--line);background:#fff;display:flex;justify-content:space-between;align-items:center;gap:8px;flex:none}
 .chat-tab{display:flex;gap:4px;padding:8px;background:#f7f9fa;border-bottom:1px solid var(--line);flex:none}
@@ -172,7 +172,7 @@ table.t tr:hover td{background:#fafcfc}
 .msg .atts{margin-top:6px;display:flex;flex-direction:column;gap:4px}
 .msg .att-file{display:flex;align-items:center;gap:6px;background:rgba(0,0,0,.06);padding:6px 8px;border-radius:6px;font-size:11.5px;cursor:pointer;font-weight:600}
 .msg .att-file:hover{background:rgba(0,0,0,.1)}
-.chat-input{padding:10px 12px;background:#f0f2f5;display:flex;gap:8px;align-items:flex-end;flex:none;border-top:1px solid var(--line)}
+.chat-input{padding:10px 12px;min-width:0;background:#f0f2f5;display:flex;gap:8px;align-items:flex-end;flex:none;border-top:1px solid var(--line)}
 .chat-input textarea{flex:1;min-height:42px;max-height:120px;resize:none;border-radius:20px;padding:10px 14px;font-size:13.5px;line-height:1.4}
 .chat-input .att-btn{width:42px;height:42px;border-radius:50%;padding:0;display:grid;place-items:center;font-size:18px;background:#fff;border:1px solid var(--line);flex:none}
 .chat-input .send-btn{width:42px;height:42px;border-radius:50%;padding:0;display:grid;place-items:center;font-size:18px;background:var(--teal);color:#fff;flex:none}
@@ -229,8 +229,53 @@ input[dir="ltr"],select[dir="ltr"],textarea[dir="ltr"],.ltr{direction:ltr;text-a
 .dept-resp .dr-meta{font-size:11px;color:var(--teal);margin-bottom:6px}
 .dept-resp p{margin:0;font-size:12.5px;color:var(--text);line-height:1.7;white-space:pre-wrap;background:#f7f9fa;padding:8px 10px;border-radius:6px}
 
-@media(max-width:900px){.layout{grid-template-columns:1fr}aside{display:flex;overflow:auto;border-bottom:1px solid var(--line);padding:10px;gap:6px;max-height:none}aside .nav{width:auto;white-space:nowrap;padding:9px 14px}.stats{grid-template-columns:repeat(2,1fr)}.chat-wrap{grid-template-columns:1fr;height:calc(100vh - 66px - 20px)}.chat-side{display:none}.chat-side.show{display:flex}.chat-main{display:none}.chat-main.show{display:flex}.chat-back-btn{display:inline-block!important}}
-@media(max-width:600px){main{padding:14px}.grid2{grid-template-columns:1fr}.dgrid{grid-template-columns:1fr 1fr}.ph h2{font-size:20px}.bed-grid{grid-template-columns:repeat(2,1fr)}.top{padding:0 14px}}
+.mobile-bottom-nav{display:none}
+@media(max-width:900px){
+  body{overflow-x:hidden}
+  .layout{grid-template-columns:1fr;min-width:0}
+  aside{display:none;overflow-x:auto;overflow-y:hidden;border-bottom:1px solid var(--line);padding:10px;gap:6px;max-height:none;min-width:0}
+  .mobile-menu-open aside{display:flex}
+  aside .nav{width:auto;white-space:nowrap;padding:9px 14px;flex:none}
+  .stats{grid-template-columns:repeat(2,1fr)}
+  main{min-width:0;overflow-x:hidden;padding-bottom:88px}
+  .chat-wrap{grid-template-columns:1fr;height:calc(100dvh - 66px - 100px - 68px);min-height:300px}
+  .chat-side{display:none}
+  .chat-side.show{display:flex}
+  .chat-main{display:none;min-width:0}
+  .chat-main.show{display:flex}
+  .chat-back-btn{display:inline-block!important;flex:none}
+  .mobile-bottom-nav{position:fixed;display:grid;grid-template-columns:repeat(4,1fr);gap:4px;right:0;bottom:0;left:0;height:64px;padding:6px 8px calc(6px + env(safe-area-inset-bottom));background:rgba(255,255,255,.98);border-top:1px solid var(--line);box-shadow:0 -4px 18px rgba(20,48,65,.12);z-index:15}
+  .mobile-bottom-nav button{min-width:0;background:transparent;color:var(--muted);border-radius:10px;padding:5px 3px;font-size:11px;line-height:1.1;display:grid;place-items:center;gap:2px}
+  .mobile-bottom-nav button .bn-icon{font-size:19px;line-height:1}
+  .mobile-bottom-nav button.active,.mobile-bottom-nav button:focus-visible{background:#eaf5f4;color:var(--teal);outline:none}
+  .mobile-bottom-nav .bn-count{font-size:9px;background:var(--red);color:#fff;border-radius:9px;padding:1px 5px;margin-inline-start:3px}
+}
+@media(max-width:600px){
+  main{padding:14px;padding-bottom:88px}
+  .grid2{grid-template-columns:1fr}
+  .dgrid{grid-template-columns:1fr 1fr}
+  .ph h2{font-size:20px}
+  .bed-grid{grid-template-columns:repeat(2,1fr)}
+  .top{padding:8px 10px;gap:6px}
+  .tl{flex:1 1 120px}
+  .tl strong{font-size:17px!important}
+  .tl small{font-size:10px!important}
+  .ur{flex:1 1 100%;justify-content:flex-end;gap:5px;flex-wrap:wrap}
+  .ur > div[style*="text-align:left"]{max-width:92px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .ur .av{width:32px;height:32px;flex:none}
+  .ur button{flex:none}
+}
+@media(max-width:390px){
+  .top{padding-inline:8px}
+  .ur{gap:3px}
+  .ur > div[style*="text-align:left"]{max-width:70px;font-size:11px!important}
+  .ur > div[style*="text-align:left"] > div:last-child{display:none}
+  .ghost.sm{padding:6px 8px}
+  .notif-btn{padding:7px 9px}
+  .chat-input{gap:4px;padding-inline:6px}
+  .chat-input .att-btn,.chat-input .send-btn{width:38px;height:38px}
+}
+
 </style>
 </head>
 <body>
@@ -281,6 +326,12 @@ input[dir="ltr"],select[dir="ltr"],textarea[dir="ltr"],.ltr{direction:ltr;text-a
     <aside><div id="navArea"></div></aside>
     <main id="main"></main>
   </div>
+  <nav class="mobile-bottom-nav" id="mobileBottomNav" aria-label="التنقل السريع">
+    <button type="button" data-mobile-nav="home" onclick="mobileNav('home')"><span class="bn-icon">⌂</span><span>الرئيسية</span></button>
+    <button type="button" data-mobile-nav="chat" onclick="mobileNav('chat')"><span class="bn-icon">💬</span><span>المحادثات<span class="bn-count hidden" id="mobileChatCount">0</span></span></button>
+    <button type="button" data-mobile-nav="notifications" onclick="mobileNav('notifications')"><span class="bn-icon">🔔</span><span>الإشعارات<span class="bn-count hidden" id="mobileNotifCount">0</span></span></button>
+    <button type="button" data-mobile-nav="menu" onclick="mobileNav('menu')"><span class="bn-icon">☰</span><span>القائمة</span></button>
+  </nav>
 </div>
 
 <div id="modalRoot"></div>
@@ -696,8 +747,9 @@ const verifyPassword = (pass, salt, hash) => constantTimeHexEqual(hashPassword(p
 function validatePasswordPolicy(p, username) {
   const errors = [];
   if (!p || p.length < 8) errors.push('8 أحرف على الأقل');
-  if (!/[a-zA-Z]/.test(p)) errors.push('حرف إنجليزي واحد');
-  if (!/[0-9]/.test(p)) errors.push('رقم واحد');
+  if (!/[A-Z]/.test(p)) errors.push('حرف إنجليزي كبير واحد على الأقل');
+  if (!/[a-z]/.test(p)) errors.push('حرف إنجليزي صغير واحد على الأقل');
+  if (!/[0-9]/.test(p)) errors.push('رقم واحد على الأقل');
   if (/^\s|\s$/.test(p)) errors.push('بدون مسافات');
   if (username && p.toLowerCase().includes(String(username).toLowerCase())) errors.push('لا تحتوي على اسم المستخدم');
   return errors;
@@ -1549,7 +1601,7 @@ async function approveUser(id) {
     <div class="notice info"><b>${esc(u.full_name)}</b><br>${esc(u.employee_number)}<br>${esc(u.mobile)}</div><div id="approveErr" class="notice danger hidden"></div>
     <form onsubmit="completeApproval(event, '${u.id}')"><div class="field"><label>الدور *</label><select name="role" required><option value="">— اختر —</option><option value="coordinator">منسق</option><option value="doctor">طبيب</option><option value="beds">إدارة أسرة</option><option value="admin">مدير</option></select></div>
     <div class="field"><label>القسم (للأطباء فقط)</label><select name="department"><option value="">—</option>${DEPARTMENTS.map(d => `<option value="${esc(d)}">${esc(d)}</option>`).join('')}</select></div>
-    <div class="field"><label>كلمة المرور المؤقتة (اختياري)</label><input name="temp_password" minlength="12" value="${esc(tempPass)}"></div>
+    <div class="field"><label>كلمة المرور المؤقتة (اختياري)</label><input name="temp_password" minlength="8" value="${esc(tempPass)}" aria-describedby="tempPasswordHint"><small id="tempPasswordHint" class="pw-hint">8 أحرف على الأقل، مع حرف كبير وحرف صغير ورقم، وبدون رقم الموظف.</small></div>
     <div style="display:flex;gap:8px;margin-top:14px"><button class="success" type="submit" style="flex:1">✓ تفعيل</button><button class="danger" type="button" onclick="rejectRegistration('${u.id}')">✕ رفض</button></div></form>
   </div></div>`;
 }
@@ -1648,11 +1700,13 @@ function enterApp() {
 }
 
 function showChangePassword(force = false) {
-  $('modalRoot').innerHTML = `<div class="modal-back" ${force ? '' : 'onclick="if(event.target===this)closeModal()"'}><div class="modal" style="max-width:520px"><div class="mh"><h3>🔑 تغيير كلمة المرور</h3>${force ? '' : '<button class="ghost sm" onclick="closeModal()">✕</button>'}</div><div class="notice info">يجب تغيير كلمة المرور المؤقتة قبل استخدام النظام. لا تُحفظ كلمة المرور في بيانات التطبيق.</div><div id="changePassErr" class="notice danger hidden"></div><form onsubmit="submitChangePassword(event)"><div class="field"><label>كلمة المرور الجديدة *</label><input name="password" type="password" minlength="12" required autocomplete="new-password"></div><div class="field"><label>تأكيد كلمة المرور *</label><input name="confirm" type="password" minlength="12" required autocomplete="new-password"></div><button class="primary" style="width:100%">حفظ كلمة المرور</button></form>${force ? '<button class="ghost" onclick="doLogout()" style="width:100%;margin-top:8px">خروج</button>' : ''}</div></div>`;
+  $('modalRoot').innerHTML = `<div class="modal-back" ${force ? '' : 'onclick="if(event.target===this)closeModal()"'}><div class="modal" style="max-width:520px"><div class="mh"><h3>🔑 تغيير كلمة المرور</h3>${force ? '' : '<button class="ghost sm" onclick="closeModal()">✕</button>'}</div><div class="notice info">يجب تغيير كلمة المرور المؤقتة قبل استخدام النظام. استخدم 8 أحرف على الأقل، مع حرف كبير وحرف صغير ورقم، وبدون مسافات طرفية أو رقم الموظف. لا تُحفظ كلمة المرور في بيانات التطبيق.</div><div id="changePassErr" class="notice danger hidden"></div><form onsubmit="submitChangePassword(event)"><div class="field"><label>كلمة المرور الجديدة *</label><input name="password" type="password" minlength="8" required autocomplete="new-password"></div><div class="field"><label>تأكيد كلمة المرور *</label><input name="confirm" type="password" minlength="8" required autocomplete="new-password"></div><button class="primary" style="width:100%">حفظ كلمة المرور</button></form>${force ? '<button class="ghost" onclick="doLogout()" style="width:100%;margin-top:8px">خروج</button>' : ''}</div></div>`;
 }
 async function submitChangePassword(e) {
   e.preventDefault();
   const d = Object.fromEntries(new FormData(e.target)); const err = $('changePassErr'); err.classList.add('hidden');
+  const policyErrors = validatePasswordPolicy(d.password, CURRENT_USER?.employee_number || CURRENT_USER?.username);
+  if (policyErrors.length) { err.textContent = '❌ ' + policyErrors.join(' • '); err.classList.remove('hidden'); return; }
   if (d.password !== d.confirm) { err.textContent = '❌ كلمتا المرور غير متطابقتين'; err.classList.remove('hidden'); return; }
   try {
     const res = await fetch(API_BASE + '/api/password', { method: 'POST', headers: { 'Content-Type': 'application/json' }, credentials: 'same-origin', body: JSON.stringify({ password: d.password }) });
@@ -1714,8 +1768,32 @@ function buildNav() {
   }
 
   $('navArea').innerHTML = items.map(x => `<button class="nav ${PAGE === x.id ? 'active' : ''}" onclick="showPage('${x.id}')">${x.icon} ${x.label}${x.count ? ` <span class="count">${x.count}</span>` : ''}</button>`).join('');
+  updateMobileBottomNav();
 }
 
+function mobileNav(target) {
+  if (target === 'menu') {
+    document.body.classList.toggle('mobile-menu-open');
+    return;
+  }
+  document.body.classList.remove('mobile-menu-open');
+  if (target === 'home') showPage('dashboard');
+  else showPage(target);
+}
+function updateMobileBottomNav() {
+  const nav = $('mobileBottomNav');
+  if (!nav) return;
+  nav.querySelectorAll('[data-mobile-nav]').forEach(button => {
+    const target = button.dataset.mobileNav;
+    button.classList.toggle('active', target === 'chat' && PAGE === 'chat' || target === 'notifications' && PAGE === 'notifications' || target === 'home' && ['dashboard','doctor_inbox','bed_requests'].includes(PAGE));
+  });
+  const chatCount = $('mobileChatCount');
+  const notifCount = $('mobileNotifCount');
+  const chats = getTotalUnreadChats();
+  const notifs = typeof DATA !== 'undefined' && DATA?.notifications ? DATA.notifications.filter(n => n.user_id === CURRENT_USER?.id && !n.read).length : 0;
+  if (chatCount) { chatCount.textContent = chats; chatCount.classList.toggle('hidden', !chats); }
+  if (notifCount) { notifCount.textContent = notifs; notifCount.classList.toggle('hidden', !notifs); }
+}
 function showPage(p) {
   if (p === 'transport' || p === 'return_pending' || p === 'bed_awaiting_arrival') {
     if (CURRENT_USER.role === 'doctor') p = 'doctor_inbox';

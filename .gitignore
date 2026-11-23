@@ -12,3 +12,5 @@ backend/.env.*
 credentials*.json
 secrets*.json
 .DS_Store
+
+backups/

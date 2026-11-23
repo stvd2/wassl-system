@@ -34,8 +34,12 @@ module.exports = async function handler(req, res) {
     if (!found.data) return json(res, 404, { error: 'الطلب غير موجود أو تمت معالجته', request_id: requestId });
     const request = found.data;
     const email = internalEmail(request.employee_number);
-    const password = String(b.temp_password || '').trim() || temporaryPassword();
-    if (password.length < 12) return json(res, 400, { error: 'كلمة المرور المؤقتة يجب ألا تقل عن 12 رمزاً', request_id: requestId });
+    const suppliedPassword = String(b.temp_password || '');
+    const password = suppliedPassword || temporaryPassword();
+    if (password.length < 8 || password.length > 128) return json(res, 400, { error: 'كلمة المرور المؤقتة يجب أن تكون بين 8 و128 رمزاً', request_id: requestId });
+    if (!/[A-Z]/.test(password) || !/[a-z]/.test(password) || !/[0-9]/.test(password)) return json(res, 400, { error: 'كلمة المرور المؤقتة يجب أن تحتوي على حرف كبير وحرف صغير ورقم', request_id: requestId });
+    if (/^\s|\s$/.test(password)) return json(res, 400, { error: 'لا تبدأ أو تنتهي كلمة المرور المؤقتة بمسافة', request_id: requestId });
+    if (password.toLowerCase().includes(String(request.employee_number).toLowerCase())) return json(res, 400, { error: 'لا تستخدم رقم الموظف داخل كلمة المرور المؤقتة', request_id: requestId });
 
     let authUser = await existingAuthUser(email);
     if (authUser) {
