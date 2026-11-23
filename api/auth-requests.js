@@ -56,7 +56,7 @@ module.exports = async function handler(req, res) {
     const auth = await requireUser(req, { roles: ['admin'] });
     if (!auth.ok) return json(res, auth.status, { error: auth.error });
     if (req.method === 'GET') {
-      const result = await admin.from('auth_requests').select('*').order('created_at', { ascending: false }).limit(1000);
+      const result = await admin.from('auth_requests').select('*').eq('status', 'pending').order('created_at', { ascending: false }).limit(1000);
       if (result.error) throw result.error;
       return json(res, 200, { requests: result.data.map(publicRequest) });
     }
