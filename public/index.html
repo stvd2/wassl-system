@@ -319,6 +319,7 @@ input[dir="ltr"],select[dir="ltr"],textarea[dir="ltr"],.ltr{direction:ltr;text-a
     <div class="tl"><div class="mini">و</div><div><strong style="color:var(--navy);font-size:19px">وَصْل</strong><small style="display:block;color:var(--muted);font-size:11px">نظام إدارة الإحالات الطبية</small></div></div>
     <div class="ur">
       <button class="ghost xs" onclick="syncNow()" title="مزامنة الآن">🔄</button>
+      <button class="primary xs hidden" id="topCreateReferral" onclick="showPage('create')" title="إحالة جديدة">＋ إحالة جديدة</button>
       <button class="notif-btn" onclick="showPage('notifications')" title="الإشعارات">🔔<span class="badge hidden" id="notifBadge">0</span></button>
       <button class="ghost sm" onclick="showChangePassword(false)" title="تغيير كلمة المرور">🔑</button>
       <div style="text-align:left"><div id="userName" style="font-weight:700;font-size:13px">—</div><div id="userRole" style="color:var(--muted);font-size:11px">—</div></div>
@@ -394,6 +395,8 @@ let CREATE_MODAL_ACTIVE = false;
 let CREATE_SUBMITTING = false;
 let CREATE_RETURN_PAGE = 'outgoing';
 let MODAL_SCROLL_Y = 0;
+let SECTION_MODAL_ACTIVE = false;
+let SECTION_MODAL_PAGE = '';
 let LIST_QUERY = '';
 let LIST_STATUS = '';
 let LIST_TYPE = '';
@@ -1775,7 +1778,8 @@ function buildNav() {
     items.push({ id: 'db_monitor', icon: '💾', label: 'مراقبة القاعدة والمزامنة' });
   }
 
-  if (canCreateReferral()) items.unshift({ id: 'create', icon: '＋', label: 'إحالة جديدة' });
+  const topCreate = $('topCreateReferral');
+  if (topCreate) topCreate.classList.toggle('hidden', !canCreateReferral());
 
   const chatUnread = getTotalUnreadChats();
   items.push({ id: 'chat', icon: '💬', label: 'المحادثات', count: chatUnread });
@@ -1811,6 +1815,42 @@ function updateMobileBottomNav() {
   if (chatCount) { chatCount.textContent = chats; chatCount.classList.toggle('hidden', !chats); }
   if (notifCount) { notifCount.textContent = notifs; notifCount.classList.toggle('hidden', !notifs); }
 }
+const SECTION_TITLES = {
+  dashboard:['لوحة التحكم','نظرة شاملة على جميع الإحالات'],
+  create:['إحالة جديدة','تسجيل حالة جديدة'],
+  outgoing:['جميع الإحالات','كل الإحالات في النظام'],
+  forward_consultant:['قبول الطبيب','إحالات قَبِلها الطبيب — بانتظار توجيهك'],
+  consultation_ready:['الاستشارات الجاهزة','استشارات جاهزة للطباعة والإغلاق'],
+  need_supplement:['استكمال مطلوب','الطبيب يطلب معلومات إضافية'],
+  bed_decisions:['قرارات الأسرة','قبول/رفض الأسرة — بانتظار إجراء'],
+  reports:['التقارير','الإحالات المكتملة'],
+  doctor_inbox:['الوارد','الإحالات الجديدة بانتظار قرارك'],
+  doctor_responded:['تم الرد عليها','كل قراراتك السابقة'],
+  bed_requests:['طلبات الأسرة','بانتظار قرار الأسرة'],
+  bed_management:['إدارة الأسرة','حالة كل سرير'],
+  users:['المستخدمون','إدارة الحسابات'],
+  audit:['سجل التدقيق','كل العمليات'],
+  db_monitor:['مراقبة القاعدة والمزامنة','حالة الخادم والنسخة المحلية وتبادل JSON'],
+  notifications:['الإشعارات','التنبيهات'],
+  shifts:['المناوبون','جدول المناوبات']
+};
+
+function dismissSectionModal() {
+  if (!SECTION_MODAL_ACTIVE) return;
+  SECTION_MODAL_ACTIVE = false;
+  SECTION_MODAL_PAGE = '';
+  $('modalRoot').innerHTML = '';
+  unlockModalBody();
+}
+function openSectionModal(p) {
+  const [title, subtitle] = SECTION_TITLES[p] || ['—', ''];
+  SECTION_MODAL_ACTIVE = true;
+  SECTION_MODAL_PAGE = p;
+  lockModalBody();
+  $('modalRoot').innerHTML = `<div class="modal-back section-modal-back" role="dialog" aria-modal="true" aria-labelledby="sectionModalTitle" onclick="if(event.target===this)closeModal()"><div class="modal section-modal"><div class="mh"><div><h3 id="sectionModalTitle">${title}</h3><small style="display:block;color:var(--muted);margin-top:3px">${subtitle}</small></div><div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">${canCreateReferral() ? '<button class="primary sm" type="button" onclick="showPage(\'create\')">＋ إحالة جديدة</button>' : ''}<button class="ghost sm" type="button" aria-label="إغلاق القسم" onclick="closeModal()">✕ إغلاق</button></div></div><div id="content"></div></div></div>`;
+  try { renderPage(p); }
+  catch (e) { $('content').innerHTML = `<div class="panel"><div class="notice danger">${esc(e.message)}</div></div>`; console.error(e); }
+}
 function showPage(p) {
   if (p === 'create') return openCreateReferralModal();
   if (p === 'transport' || p === 'return_pending' || p === 'bed_awaiting_arrival') {
@@ -1827,6 +1867,7 @@ function showPage(p) {
   if (p === 'dashboard' && CURRENT_USER.role === 'beds') p = 'bed_requests';
 
   if (p === 'chat') {
+    dismissSectionModal();
     PAGE = 'chat'; localStorage.setItem(PAGE_SESSION_KEY, PAGE); buildNav();
     $('main').innerHTML = '';
     try { renderChatPage(); } catch(e) { $('main').innerHTML = `<div class="panel"><div class="notice danger">${esc(e.message)}</div></div>`; }
@@ -1834,41 +1875,14 @@ function showPage(p) {
   }
   if (p === 'shifts') {
     PAGE = 'shifts'; localStorage.setItem(PAGE_SESSION_KEY, PAGE); buildNav();
-    $('main').innerHTML = '';
-    try { renderShiftsPage(); } catch(e) { $('main').innerHTML = `<div class="panel"><div class="notice danger">${esc(e.message)}</div></div>`; }
+    openSectionModal('shifts');
     return;
   }
 
   PAGE = p;
   localStorage.setItem(PAGE_SESSION_KEY, PAGE);
   buildNav();
-  const T = {
-    dashboard:['لوحة التحكم','نظرة شاملة على جميع الإحالات'],
-    create:['إحالة جديدة','تسجيل حالة جديدة'],
-    outgoing:['جميع الإحالات','كل الإحالات في النظام'],
-    forward_consultant:['قبول الطبيب','إحالات قَبِلها الطبيب — بانتظار توجيهك'],
-    consultation_ready:['الاستشارات الجاهزة','استشارات جاهزة للطباعة والإغلاق'],
-    need_supplement:['استكمال مطلوب','الطبيب يطلب معلومات إضافية'],
-    bed_decisions:['قرارات الأسرة','قبول/رفض الأسرة — بانتظار إجراء'],
-    reports:['التقارير','الإحالات المكتملة'],
-    doctor_inbox:['الوارد','الإحالات الجديدة بانتظار قرارك'],
-    doctor_responded:['تم الرد عليها','كل قراراتك السابقة'],
-    bed_requests:['طلبات الأسرة','بانتظار قرار الأسرة'],
-    bed_management:['إدارة الأسرة','حالة كل سرير'],
-    users:['المستخدمون','إدارة الحسابات'],
-    audit:['سجل التدقيق','كل العمليات'],
-    db_monitor:['مراقبة القاعدة والمزامنة','حالة الخادم والنسخة المحلية وتبادل JSON'],
-    notifications:['الإشعارات','التنبيهات']
-  };
-  const [t, s] = T[p] || ['—', ''];
-  $('main').innerHTML = `
-    <div class="ph">
-      <div><h2>${t}</h2><p>${s}</p></div>
-      <div>${canCreateReferral() ? '<button class="primary" onclick="showPage(\'create\')">＋ إحالة جديدة</button>' : ''}</div>
-    </div>
-    <div id="content"></div>`;
-  try { renderPage(p); }
-  catch (e) { $('content').innerHTML = `<div class="panel"><div class="notice danger">${esc(e.message)}</div></div>`; console.error(e); }
+  openSectionModal(p);
 }
 
 function renderPage(p) {
@@ -1879,6 +1893,7 @@ function renderPage(p) {
   if (p === 'db_monitor') return renderDbMonitor();
   if (p === 'bed_management') return renderBedManagement();
   if (p === 'notifications') return renderNotifications();
+  if (p === 'shifts') return renderShiftsPage();
   return renderList(p);
 }
 
@@ -2330,8 +2345,26 @@ function closeModal() {
   const wasCreate = CREATE_MODAL_ACTIVE;
   CREATE_MODAL_ACTIVE = false;
   CREATE_SUBMITTING = false;
+  if (wasCreate) {
+    $('modalRoot').innerHTML = '';
+    unlockModalBody();
+    if (PAGE === 'create') { PAGE = CREATE_RETURN_PAGE || 'outgoing'; localStorage.setItem(PAGE_SESSION_KEY, PAGE); buildNav(); }
+    if (SECTION_MODAL_ACTIVE && SECTION_MODAL_PAGE) openSectionModal(SECTION_MODAL_PAGE);
+    else if (PAGE !== 'chat' && PAGE !== 'shifts' && SECTION_TITLES[PAGE]) openSectionModal(PAGE);
+    return;
+  }
+  if (SECTION_MODAL_ACTIVE) {
+    if ($('modalRoot')?.querySelector('.section-modal')) {
+      SECTION_MODAL_ACTIVE = false;
+      SECTION_MODAL_PAGE = '';
+      $('modalRoot').innerHTML = '';
+      unlockModalBody();
+    } else if (SECTION_MODAL_PAGE) {
+      openSectionModal(SECTION_MODAL_PAGE);
+    }
+    return;
+  }
   $('modalRoot').innerHTML = '';
-  if (wasCreate) { unlockModalBody(); if (PAGE === 'create') { PAGE = CREATE_RETURN_PAGE || 'outgoing'; localStorage.setItem(PAGE_SESSION_KEY, PAGE); buildNav(); } }
 }
 document.addEventListener('keydown', e => { if (e.key === 'Escape' && $('modalRoot')?.firstElementChild) closeModal(); });
 window.addEventListener('resize', () => { const h = window.visualViewport?.height || window.innerHeight; document.documentElement.style.setProperty('--viewport-height', h + 'px'); });
@@ -3407,7 +3440,8 @@ function renderShiftsPage() {
   const upcoming = allShifts.filter(s => s.date > today);
   const past = allShifts.filter(s => s.date < today);
   const canManage = ['admin', 'coordinator'].includes(CURRENT_USER.role);
-  $('main').innerHTML = `
+  const target = $('content') || $('main');
+  target.innerHTML = `
     <div class="ph"><div><h2>🗓 المناوبون</h2><p>جدول المناوبات</p></div>${canManage ? '<div style="display:flex;gap:8px;flex-wrap:wrap"><button class="secondary" onclick="showImportShifts()">📄 استيراد PDF أو Excel</button><button class="primary" onclick="showAddShift()">＋ إضافة مناوب</button></div>' : ''}</div>
     ${todayShifts.length ? `<div class="oncall-banner"><h4>🔔 مناوبون اليوم (${today})</h4><div class="oncall-list">${todayShifts.map(s => `<span class="oncall-chip">${esc(s.user_name)} — ${esc(s.shift)} — ${roleLabel(s.role)}</span>`).join('')}</div></div>` : '<div class="notice info">ℹ لا مناوبون اليوم</div>'}
     <div class="panel"><h3>🔵 مناوبات اليوم (${todayShifts.length})</h3>${todayShifts.length ? `<div class="shift-grid">${todayShifts.map(s => renderShiftCard(s, true)).join('')}</div>` : '<div class="empty">لا مناوبات</div>'}</div>

@@ -80,7 +80,12 @@ def main():
             page.reload(wait_until='domcontentloaded')
             page.wait_for_selector('#app:not(.hidden)', timeout=15000)
             page.wait_for_function('LOCAL_CHANGE_SERIAL === CONFIRMED_CHANGE_SERIAL && !_syncBlocked', timeout=15000)
+            page.evaluate("showPage('dashboard')")
+            assert page.locator('#modalRoot .section-modal').count() == 1, 'dashboard opens in section modal'
+            page.evaluate("showPage('audit')")
+            assert page.locator('#modalRoot .section-modal').count() == 1, 'audit opens in section modal'
             page.evaluate("showPage('outgoing')")
+            assert page.locator('#modalRoot .section-modal').count() == 1, 'referral list opens in section modal'
             assert page.locator('#listWrap tbody tr').count() == 10, 'pagination first page'
             assert page.locator('nav[aria-label="صفحات الإحالات"]').count() == 1
             page.locator('select[aria-label="حجم صفحة الإحالات"]').select_option('25')
@@ -105,13 +110,14 @@ def main():
             page.evaluate('refreshFromRealtime()')
             assert page.locator('#createForm [name=patient_name]').input_value() == 'مسودة لا يجب فقدها'
             page.evaluate('closeModal()')
-            assert page.locator('#modalRoot .modal').count() == 0, 'create modal closes safely'
+            assert page.locator('#modalRoot .section-modal').count() == 1, 'create modal closes back to section'
             for role, page_name in [('coordinator', 'outgoing'), ('admin', 'outgoing'), ('doctor', 'doctor_inbox'), ('beds', 'bed_requests')]:
                 page.evaluate('''([role, target]) => {
                   CURRENT_USER = structuredClone(DATA.users.find(u => u.role === role));
                   PAGE = target; buildNav(); showPage(target);
                 }''', [role, page_name])
-                assert page.locator('button.nav').filter(has_text='إحالة جديدة').count() == 1, f'create nav for {role}'
+                assert page.locator('button.nav').filter(has_text='إحالة جديدة').count() == 0, f'create removed from sidebar for {role}'
+                assert page.locator('#topCreateReferral').is_visible(), f'independent create button for {role}'
                 page.evaluate('showPage("create")')
                 assert page.locator('#modalRoot .modal').count() == 1, f'create modal for {role}'
                 page.evaluate('closeModal()')
@@ -120,6 +126,7 @@ def main():
               PAGE = 'outgoing'; buildNav(); showPage('outgoing');
             }''')
             page.evaluate("CURRENT_CHAT='chat-1'; CHAT_TAB='direct'; showPage('chat'); openChat('chat-1')")
+            assert page.locator('#modalRoot .section-modal').count() == 0, 'chat remains outside section modal'
             page.wait_for_function('LOCAL_CHANGE_SERIAL === CONFIRMED_CHANGE_SERIAL && !_syncBlocked', timeout=15000)
             page.locator('#chatText').fill('مسودة رسالة محفوظة')
             page.locator('#chatImgInput').set_input_files({'name':'sample.png','mimeType':'image/png','buffer':b'fake-image'})
@@ -173,7 +180,12 @@ def main():
             assert page.locator('#modalRoot [name=patient_name]').input_value() == 'اسم في مسودة قديمة'
             assert page.evaluate("DATA.referrals.find(r=>r.id==='ref-0').diagnosis") == 'تشخيص أحدث من جهاز آخر'
             page.evaluate("DATA.referrals.find(r=>r.id==='ref-0').diagnosis='اختبار';closeModal()")
-            page.evaluate("showPage('shifts');showImportShifts()")
+            page.evaluate("showPage('notifications')")
+            assert page.locator('#modalRoot .section-modal').count() == 1, 'notifications opens in section modal'
+            page.evaluate("showPage('shifts')")
+            assert page.locator('#modalRoot .section-modal').count() == 1, 'shifts opens in section modal'
+            page.evaluate("showImportShifts()")
+            assert page.locator('#modalRoot .section-modal').count() == 0, 'shift import opens as child modal'
             csv = 'التاريخ,الفترة,اسم الدخول,ملاحظات\n2027-02-15,صباحي,doc,اختبار\n'.encode()
             page.locator('#shiftImportFile').set_input_files({'name':'shifts.csv','mimeType':'text/csv','buffer':csv})
             page.wait_for_selector('[data-shift-row="0"]', timeout=20000)
