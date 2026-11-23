@@ -1547,6 +1547,11 @@ async function completeApproval(e, id) {
     const res = await fetch(API_BASE + '/api/auth-requests-approve', { method: 'POST', headers: {'Content-Type':'application/json'}, credentials:'same-origin', body: JSON.stringify({ id, role:d.role, department:d.department, temp_password:d.temp_password }) });
     const body = await res.json().catch(() => ({})); if (!res.ok) throw new Error(body.error || 'تعذر اعتماد الطلب');
     AUTH_REQUESTS = AUTH_REQUESTS.filter(x => x.id !== id);
+    const approvedUser = { ...body.user, id: body.user.auth_user_id, username: body.user.employee_number, pending_approval: false, rejected: false, must_change_password: true };
+    const existingIndex = DATA.users.findIndex(x => x.id === approvedUser.id || x.username === approvedUser.username);
+    if (existingIndex >= 0) DATA.users[existingIndex] = { ...DATA.users[existingIndex], ...approvedUser };
+    else DATA.users.push(approvedUser);
+    saveData();
     $('modalRoot').innerHTML = `<div class="modal-back" onclick="if(event.target===this){closeModal();renderUsers()}"><div class="modal" style="max-width:480px"><div class="mh"><h3>✓ تم إنشاء الحساب</h3><button class="ghost sm" onclick="closeModal();renderUsers()">✕</button></div><div class="notice success">سلّم الموظف هذه البيانات عبر قناة آمنة، وسيُجبر على تغيير كلمة المرور عند أول دخول.</div><div class="dgrid" style="grid-template-columns:1fr 1fr"><div class="d"><small>رقم الموظف</small><strong>${esc(body.user.employee_number)}</strong></div><div class="d"><small>كلمة المرور المؤقتة</small><strong>${esc(body.temporary_password)}</strong></div></div><button class="primary" onclick="navigator.clipboard.writeText('Employee: ${esc(body.user.employee_number)}\nPass: ${esc(body.temporary_password)}').then(()=>toast('تم النسخ','ok'))" style="width:100%">📋 نسخ</button></div></div>`;
   } catch (e) { err.textContent = '❌ ' + e.message; err.classList.remove('hidden'); }
 }
