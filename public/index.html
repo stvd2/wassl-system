@@ -402,6 +402,10 @@ let LIST_DEPT = '';
 function canPrint() {
   return ['coordinator', 'admin'].includes(CURRENT_USER?.role);
 }
+const CREATE_REFERRAL_ROLES = ['coordinator', 'admin', 'doctor', 'beds'];
+function canCreateReferral() {
+  return !!CURRENT_USER && CREATE_REFERRAL_ROLES.includes(CURRENT_USER.role) && CURRENT_USER.active !== false && !CURRENT_USER.pending_approval;
+}
 
 async function refreshFromRealtime() {
   if (REALTIME_REFRESHING || _syncBlocked || ACTIVE_ATTACHMENT_UPLOADS || LOCAL_CHANGE_SERIAL !== CONFIRMED_CHANGE_SERIAL) return;
@@ -1747,7 +1751,6 @@ function buildNav() {
     const bedDecisions = refs.filter(x => ['bed_approved', 'bed_rejected'].includes(x.status));
     items = [
       { id: 'dashboard', icon: '▦', label: 'لوحة التحكم' },
-      { id: 'create', icon: '＋', label: 'إحالة جديدة' },
       { id: 'outgoing', icon: '↗', label: 'جميع الإحالات', count: active.length },
       { id: 'forward_consultant', icon: '⇄', label: 'قبول الطبيب', count: accepted.length },
       { id: 'consultation_ready', icon: '📋', label: 'استشارات جاهزة', count: consultation.length },
@@ -1771,6 +1774,8 @@ function buildNav() {
     items.push({ id: 'audit', icon: '📋', label: 'سجل التدقيق' });
     items.push({ id: 'db_monitor', icon: '💾', label: 'مراقبة القاعدة والمزامنة' });
   }
+
+  if (canCreateReferral()) items.unshift({ id: 'create', icon: '＋', label: 'إحالة جديدة' });
 
   const chatUnread = getTotalUnreadChats();
   items.push({ id: 'chat', icon: '💬', label: 'المحادثات', count: chatUnread });
@@ -1859,7 +1864,7 @@ function showPage(p) {
   $('main').innerHTML = `
     <div class="ph">
       <div><h2>${t}</h2><p>${s}</p></div>
-      <div>${(CURRENT_USER.role === 'coordinator' || CURRENT_USER.role === 'admin') && p === 'outgoing' ? '<button class="primary" onclick="showPage(\'create\')">＋ إحالة جديدة</button>' : ''}</div>
+      <div>${canCreateReferral() ? '<button class="primary" onclick="showPage(\'create\')">＋ إحالة جديدة</button>' : ''}</div>
     </div>
     <div id="content"></div>`;
   try { renderPage(p); }
@@ -2073,7 +2078,7 @@ function unlockModalBody() {
   window.scrollTo(0, MODAL_SCROLL_Y);
 }
 function openCreateReferralModal() {
-  if (!['coordinator', 'admin'].includes(CURRENT_USER?.role)) return toast('غير مصرح', 'err');
+  if (!canCreateReferral()) return toast('غير مصرح — إنشاء الإحالة متاح للمستخدمين التشغيليين فقط', 'err');
   CREATE_RETURN_PAGE = PAGE === 'create' ? 'outgoing' : PAGE;
   CREATE_MODAL_ACTIVE = true;
   lockModalBody();
@@ -2112,6 +2117,7 @@ function updateFileInfo(input) {
 
 async function submitReferral(e) {
   e.preventDefault();
+  if (!canCreateReferral()) return toast('غير مصرح — إنشاء الإحالة متاح للمستخدمين التشغيليين فقط', 'err');
   const f = e.target;
   const fd = new FormData(f);
   const d = Object.fromEntries(fd);

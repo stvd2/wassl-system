@@ -15,6 +15,8 @@ now = '2026-11-22T00:00:00.000Z'
 users = [
     {'id': 'admin-id', 'username': 'admin', 'full_name': 'مدير اختبار', 'role': 'admin', 'active': True, 'created_at': now, 'mobile': '0500000001'},
     {'id': 'doctor-id', 'username': 'doc', 'full_name': 'طبيب اختبار', 'role': 'doctor', 'department': 'الباطنة', 'active': True, 'created_at': now, 'mobile': '0500000002'},
+    {'id': 'coordinator-id', 'username': 'coord', 'full_name': 'منسق اختبار', 'role': 'coordinator', 'active': True, 'created_at': now, 'mobile': '0500000003'},
+    {'id': 'beds-id', 'username': 'beds', 'full_name': 'إدارة أسرّة اختبار', 'role': 'beds', 'active': True, 'created_at': now, 'mobile': '0500000004'},
 ]
 refs = [{'id': f'ref-{i}', 'ref_no': f'R-{i}', 'patient_name': f'مريض تجريبي {i}', 'mrn': str(i), 'priority': 'تنويم عادي', 'specialty': 'الباطنة', 'target_specialty': 'الباطنة', 'status': 'awaiting_doctor', 'created_at': now, 'updated_at': now, 'diagnosis': 'اختبار', 'timeline': [], 'attachment_ids': []} for i in range(25)]
 defaults = [('جميع المنسقين','coordinator'),('جميع الأطباء','doctor'),('إدارة الأسرة','beds'),('المديرون','admin'),('الجميع','all')]
@@ -104,6 +106,19 @@ def main():
             assert page.locator('#createForm [name=patient_name]').input_value() == 'مسودة لا يجب فقدها'
             page.evaluate('closeModal()')
             assert page.locator('#modalRoot .modal').count() == 0, 'create modal closes safely'
+            for role, page_name in [('coordinator', 'outgoing'), ('admin', 'outgoing'), ('doctor', 'doctor_inbox'), ('beds', 'bed_requests')]:
+                page.evaluate('''([role, target]) => {
+                  CURRENT_USER = structuredClone(DATA.users.find(u => u.role === role));
+                  PAGE = target; buildNav(); showPage(target);
+                }''', [role, page_name])
+                assert page.locator('button.nav').filter(has_text='إحالة جديدة').count() == 1, f'create nav for {role}'
+                page.evaluate('showPage("create")')
+                assert page.locator('#modalRoot .modal').count() == 1, f'create modal for {role}'
+                page.evaluate('closeModal()')
+            page.evaluate('''() => {
+              CURRENT_USER = structuredClone(DATA.users.find(u => u.role === 'admin'));
+              PAGE = 'outgoing'; buildNav(); showPage('outgoing');
+            }''')
             page.evaluate("CURRENT_CHAT='chat-1'; CHAT_TAB='direct'; showPage('chat'); openChat('chat-1')")
             page.wait_for_function('LOCAL_CHANGE_SERIAL === CONFIRMED_CHANGE_SERIAL && !_syncBlocked', timeout=15000)
             page.locator('#chatText').fill('مسودة رسالة محفوظة')
