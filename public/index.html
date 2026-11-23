@@ -3387,10 +3387,10 @@ async function clearCurrentChat(chatId) {
   const button = [...document.querySelectorAll('[data-clear-chat]')].find(el => el.dataset.clearChat === chatId);
   if (button) { button.disabled = true; button.textContent = 'جارٍ المسح…'; }
   try {
-    const response = await fetch(API_BASE + '/api/chat-clear', {
+    const response = await fetch(API_BASE + '/api/state', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ chat_id: chatId, expected_revision: Number(DATA.meta.sync_revision || 0) }),
+      body: JSON.stringify({ action: 'clear_chat', chat_id: chatId, expected_revision: Number(DATA.meta.sync_revision || 0) }),
       cache: 'no-store'
     });
     const result = await response.json().catch(() => ({}));

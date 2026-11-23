@@ -66,8 +66,9 @@ class Handler(SimpleHTTPRequestHandler):
     def do_POST(self):
         path = urlparse(self.path)
         body = self.rfile.read(int(self.headers.get('content-length', '0')))
-        if path.path != '/api/chat-clear': self.reply(404, {'error':'not found'}); return
+        if path.path != '/api/state': self.reply(404, {'error':'not found'}); return
         payload = json.loads(body or b'{}')
+        if payload.get('action') != 'clear_chat': self.reply(400, {'error':'invalid action'}); return
         with lock:
             chat = next((c for c in state['chats'] if c['id'] == payload.get('chat_id')), None)
             if not chat: self.reply(404, {'error':'not found'}); return
