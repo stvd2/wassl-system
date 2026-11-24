@@ -9,6 +9,11 @@ const BUCKET = 'attachments';
 const MAX_BYTES = 15 * 1024 * 1024;
 const MIME_TYPES = new Set(['application/pdf', 'image/jpeg', 'image/png', 'image/webp', 'application/vnd.ms-excel', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', 'text/csv']);
 const ACCEPTANCE_MIME_TYPES = new Set(['application/pdf', 'image/jpeg', 'image/png']);
+const ACCEPTANCE_MAGIC = {
+  'application/pdf': buffer => buffer.subarray(0, 5).toString('ascii') === '%PDF-',
+  'image/jpeg': buffer => buffer.length >= 3 && buffer[0] === 0xff && buffer[1] === 0xd8 && buffer[2] === 0xff,
+  'image/png': buffer => buffer.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]))
+};
 
 function idFrom(req) {
   const value = String(req.query?.id || req.headers['x-attachment-id'] || '').trim();
@@ -24,6 +29,8 @@ function outgoingContextFrom(req) {
   return { referralId, category };
 }
 function originalNameFrom(req, id) { return String(req.query?.name || req.headers['x-original-name'] || id).trim().slice(0, 255) || id; }
+function acceptanceStoragePath(referralId, id) { return `acceptance_letters/${referralId}/${id}`; }
+function matchesMagic(contentType, body) { return ACCEPTANCE_MAGIC[contentType]?.(body) === true; }
 function send(res, status, body, type = 'application/json; charset=utf-8') {
   res.statusCode = status; res.setHeader('Content-Type', type); res.setHeader('Cache-Control', 'private, no-store'); res.end(body);
 }
@@ -57,21 +64,24 @@ async function handleOutgoing(req, res, auth, context, id) {
   if (!referral) return send(res, 404, JSON.stringify({ error: 'الإحالة الصادرة غير موجودة' }));
   const role = String(auth.profile?.role || '');
   const linkedId = String(referral.acceptance_letter_attachment_id || '');
+  const storagePath = acceptanceStoragePath(context.referralId, id);
   if (req.method === 'PUT' || req.method === 'POST') {
     if (!['coordinator', 'admin'].includes(role)) return send(res, 403, JSON.stringify({ error: 'رفع خطاب القبول متاح للمنسق أو المدير فقط' }));
     if (linkedId && linkedId !== id) return send(res, 409, JSON.stringify({ error: 'للإحالة خطاب قبول مرتبط مسبقاً؛ حدّث السجل أولاً' }));
     const contentType = String(req.headers['content-type'] || 'application/octet-stream').split(';')[0].toLowerCase();
     if (!ACCEPTANCE_MIME_TYPES.has(contentType)) return send(res, 415, JSON.stringify({ error: 'نوع خطاب القبول غير مسموح' }));
+    if (await attachmentFor(id)) return send(res, 409, JSON.stringify({ error: 'معرّف المرفق مستخدم في مرفق محادثة' }));
     const body = await readBody(req);
     if (!body.length || body.length > MAX_BYTES) return send(res, 413, JSON.stringify({ error: 'حجم الملف غير صالح' }));
-    const { error } = await supabase.storage.from(BUCKET).upload(id, body, { contentType, upsert: true, cacheControl: '3600' });
+    if (!matchesMagic(contentType, body)) return send(res, 415, JSON.stringify({ error: 'محتوى الملف لا يطابق نوعه المعلن' }));
+    const { error } = await supabase.storage.from(BUCKET).upload(storagePath, body, { contentType, upsert: true, cacheControl: '3600' });
     if (error) throw error;
     return send(res, 200, JSON.stringify({ ok: true, id, attachment: { id, category: 'acceptance_letter', referral_id: context.referralId, original_name: originalNameFrom(req, id), mime_type: contentType, size: body.length, uploaded_by: auth.authUser.id, uploaded_at: new Date().toISOString() } }));
   }
   if (!canAccessOutgoing(referral, auth)) return send(res, 403, JSON.stringify({ error: 'لا تملك صلاحية هذه الإحالة' }));
   if (req.method === 'GET') {
     if (linkedId !== id) return send(res, 404, JSON.stringify({ error: 'خطاب القبول غير مرتبط بهذه الإحالة' }));
-    const { data, error } = await supabase.storage.from(BUCKET).download(id);
+    const { data, error } = await supabase.storage.from(BUCKET).download(storagePath);
     if (error || !data) return send(res, 404, JSON.stringify({ error: 'المرفق غير موجود' }));
     const buf = Buffer.from(await data.arrayBuffer()); res.statusCode = 200; res.setHeader('Content-Type', data.type || 'application/octet-stream'); res.setHeader('Content-Length', String(buf.length)); res.setHeader('Cache-Control', 'private, no-store'); return res.end(buf);
   }

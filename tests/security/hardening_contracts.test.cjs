@@ -74,6 +74,9 @@ test('acceptance letters require a real outgoing referral and coordinator/admin 
   assert.match(source, /\['coordinator', 'admin'\]\.includes\(role\)/);
   assert.match(source, /linkedId !== id/);
   assert.match(source, /ACCEPTANCE_MIME_TYPES/);
+  assert.match(source, /acceptance_letters\/\$\{referralId\}\/\$\{id\}/);
+  assert.match(source, /معرّف المرفق مستخدم في مرفق محادثة/);
+  assert.match(source, /matchesMagic\(contentType, body\)/);
 });
 
 test('legacy service-role state routes fail closed', () => {
