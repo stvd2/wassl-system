@@ -86,6 +86,8 @@ test('regular referral attachments use a separate verified storage context', () 
   assert.match(api, /referrals\/\$\{referralId\}\/\$\{id\}/);
   assert.match(api, /regularReferral\(context\.referralId\)/);
   assert.match(api, /canAccessRegularReferral\(referral, auth\)/);
+  assert.match(api, /function requestValue\(req, key\)/);
+  assert.match(api, /new URL\(rawUrl, 'http:\/\/localhost'\)\.searchParams/);
   assert.match(api, /upsert: false/);
   assert.match(page, /attsPut\(attId, file, \{ referral_id: id, category: 'referral_attachment' \}\)/);
   assert.match(page, /function attachmentUrl\(id, context = \{\}\)/);

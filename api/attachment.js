@@ -16,14 +16,20 @@ const ACCEPTANCE_MAGIC = {
 };
 
 function idFrom(req) {
-  const value = String(req.query?.id || req.headers['x-attachment-id'] || '').trim();
+  const value = String(requestValue(req, 'id') || req.headers['x-attachment-id'] || '').trim();
   return /^[A-Za-z0-9_-]{1,120}$/.test(value) ? value : '';
 }
-function conversationFrom(req) { return uuid(req.query?.conversation_id || req.headers['x-conversation-id']); }
-function messageFrom(req) { return uuid(req.query?.message_id || req.headers['x-message-id']); }
+function requestValue(req, key) {
+  const direct = req.query?.[key];
+  if (direct !== undefined && direct !== null && String(direct).trim()) return String(direct).trim();
+  const rawUrl = String(req.url || req.originalUrl || '');
+  try { return new URL(rawUrl, 'http://localhost').searchParams.get(key) || ''; } catch (_) { return ''; }
+}
+function conversationFrom(req) { return uuid(requestValue(req, 'conversation_id') || req.headers['x-conversation-id']); }
+function messageFrom(req) { return uuid(requestValue(req, 'message_id') || req.headers['x-message-id']); }
 function outgoingContextFrom(req) {
-  const referralId = String(req.query?.referral_id || req.headers['x-referral-id'] || '').trim();
-  const category = String(req.query?.category || req.headers['x-attachment-category'] || '').trim();
+  const referralId = String(requestValue(req, 'referral_id') || req.headers['x-referral-id'] || '').trim();
+  const category = String(requestValue(req, 'category') || req.headers['x-attachment-category'] || '').trim();
   if (referralId && !/^[A-Za-z0-9_-]{1,160}$/.test(referralId)) return null;
   if (category && !/^[A-Za-z0-9_-]{1,80}$/.test(category)) return null;
   return { referralId, category };
