@@ -95,6 +95,15 @@ test('regular referral attachments use a separate verified storage context', () 
   assert.match(page, /await flushStateSync\(\)/);
 });
 
+test('chat attachments pass conversation context for upload and retrieval', () => {
+  const page = read('public/index.html');
+  assert.match(page, /attsPut\(attId, file, \{ conversation_id: chatId \}\)/);
+  assert.match(page, /conversation_id: chatId, name: file\.name/);
+  assert.match(page, /if \(meta\.conversation_id\) return \{ conversation_id: meta\.conversation_id \}/);
+  assert.match(page, /String\(meta\.referral_id \|\| ''\)\.startsWith\('chat-'\)/);
+  assert.match(page, /attsGet\(id, attachmentContext\(DATA\.attachments\[id\]\)\)/);
+});
+
 test('legacy service-role state routes fail closed', () => {
   const source = read('backend/server.js');
   assert.match(source, /status\(410\)/);

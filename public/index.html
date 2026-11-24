@@ -1671,8 +1671,8 @@ async function sendChatMessage(chatId, text, files) {
   for (const file of validFiles) {
     try {
       const attId = 'ATT-' + uid();
-      await attsPut(attId, file);
-      stagedAttachments[attId] = { id: attId, referral_id: 'chat-' + chatId, name: file.name, type: file.type || 'application/octet-stream', size: file.size, uploaded_at: nowIso() };
+      await attsPut(attId, file, { conversation_id: chatId });
+      stagedAttachments[attId] = { id: attId, referral_id: 'chat-' + chatId, conversation_id: chatId, name: file.name, type: file.type || 'application/octet-stream', size: file.size, uploaded_at: nowIso() };
       msg.atts.push(attId);
     } catch(e) { return { ok: false, error: `فشل رفع ${file.name}: ${e.message}` }; }
   }
@@ -3371,6 +3371,8 @@ function attachmentContext(meta) {
   if (!meta) return {};
   if (meta.category === 'acceptance_letter') return { referral_id: meta.referral_id, category: 'acceptance_letter' };
   if (meta.category === 'referral_attachment' || (meta.referral_id && !String(meta.referral_id).startsWith('chat-'))) return { referral_id: meta.referral_id, category: 'referral_attachment' };
+  if (meta.conversation_id) return { conversation_id: meta.conversation_id };
+  if (String(meta.referral_id || '').startsWith('chat-')) return { conversation_id: String(meta.referral_id).slice(5) };
   return {};
 }
 async function downloadAtt(attId) {
@@ -3571,7 +3573,8 @@ function renderChatPage() {
 function loadChatImages() {
   document.querySelectorAll('#chatMsgs img[data-att]').forEach(async img => {
     try {
-      const blob = await attsGet(img.getAttribute('data-att'));
+      const id = img.getAttribute('data-att');
+      const blob = await attsGet(id, attachmentContext(DATA.attachments[id]));
       if (!blob || !img.isConnected) return;
       const url = URL.createObjectURL(blob);
       img.src = url;
@@ -3656,7 +3659,7 @@ function openChat(chatId) {
     const el = $('chatMsgs'); if (el) el.scrollTop = el.scrollHeight;
     document.querySelectorAll('img[data-att]').forEach(async img => {
       const id = img.getAttribute('data-att');
-      try { const blob = await attsGet(id); if (blob) img.src = URL.createObjectURL(blob); } catch(e) {}
+      try { const blob = await attsGet(id, attachmentContext(DATA.attachments[id])); if (blob) img.src = URL.createObjectURL(blob); } catch(e) {}
     });
   }, 50);
   buildNav();
