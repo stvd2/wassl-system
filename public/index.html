@@ -316,6 +316,11 @@ table.t th{background:#f2f7f5;color:#527068}table.t tr:hover td{background:#f7fb
 @media(max-width:900px){.lw{grid-template-columns:1fr;padding:20px;gap:16px}.lw:before{min-height:0;padding:18px 20px;font-size:20px;line-height:1.55;border-radius:18px}.lw .login{max-width:560px}.horizontal-nav{display:none}.layout{min-height:calc(100vh - 66px)}main{padding:18px 14px 88px}.top{top:0;min-height:66px;padding:8px 12px}}
 @media(max-width:600px){.lw:before{font-size:17px;padding:14px}.lw .login{padding:22px 18px}.stats{grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}.stat{padding:14px}.stat strong{font-size:24px}}
 
+
+/* Institutional identity row: approved local partner marks, without recreating or altering their artwork. */
+.login-logos{gap:16px;flex-wrap:wrap;justify-content:center;padding:4px 0 18px}
+.login-logos img{max-width:30%;max-height:50px;object-fit:contain}
+@media(max-width:600px){.login-logos{gap:10px}.login-logos img{max-width:29%;max-height:42px}}
 </style>
 </head>
 <body>
@@ -323,9 +328,10 @@ table.t th{background:#f2f7f5;color:#527068}table.t tr:hover td{background:#f7fb
 <!-- شاشة الدخول -->
 <div id="loginScreen" class="lw">
   <div class="login">
-    <div class="login-logos">
-      <img src="assets/logos/vision.png" alt="رؤية 2030" onerror="this.onerror=null;this.style.display='none'">
-      <img src="assets/logos/hospital.png" alt="مستشفى الملك فيصل" onerror="this.onerror=null;this.style.display='none'">
+    <div class="login-logos" aria-label="الجهات والهوية المؤسسية">
+      <img src="assets/logos/makkah.png" alt="هوية التجمع الصحي بمكة" onerror="this.onerror=null;this.style.display='none'">
+      <img src="assets/logos/hospital.png" alt="مستشفى الملك فيصل بمكة" onerror="this.onerror=null;this.style.display='none'">
+      <img src="assets/logos/vision.png" alt="رؤية السعودية 2030" onerror="this.onerror=null;this.style.display='none'">
     </div>
     <div class="brand"><div class="logo">و</div><div><h1>وَصْل</h1><p>نظام إدارة الإحالات الطبية</p></div></div>
     <h3 style="margin:0 0 4px;color:#17394b;font-size:18px">تسجيل الدخول</h3>
