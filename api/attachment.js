@@ -30,6 +30,7 @@ function outgoingContextFrom(req) {
 }
 function originalNameFrom(req, id) { return String(req.query?.name || req.headers['x-original-name'] || id).trim().slice(0, 255) || id; }
 function acceptanceStoragePath(referralId, id) { return `acceptance_letters/${referralId}/${id}`; }
+function referralStoragePath(referralId, id) { return `referrals/${referralId}/${id}`; }
 function matchesMagic(contentType, body) { return ACCEPTANCE_MAGIC[contentType]?.(body) === true; }
 function send(res, status, body, type = 'application/json; charset=utf-8') {
   res.statusCode = status; res.setHeader('Content-Type', type); res.setHeader('Cache-Control', 'private, no-store'); res.end(body);
@@ -52,12 +53,68 @@ async function outgoingReferral(referralId) {
   const referrals = Array.isArray(data?.data?.outgoing_referrals) ? data.data.outgoing_referrals : [];
   return referrals.find(item => String(item?.id || '') === referralId) || null;
 }
+async function regularReferral(referralId) {
+  const { data, error } = await admin.from('app_state').select('data').eq('id', 'main').maybeSingle();
+  if (error) throw error;
+  const referrals = Array.isArray(data?.data?.referrals) ? data.data.referrals : [];
+  return referrals.find(item => String(item?.id || '') === referralId) || null;
+}
 function canAccessOutgoing(referral, auth) {
   const role = String(auth.profile?.role || '');
   if (role === 'admin' || role === 'coordinator') return true;
   const userId = String(auth.authUser?.id || '');
   return role === 'doctor' && [referral?.created_by, referral?.doctor_id].map(String).includes(userId);
 }
+function canAccessRegularReferral(referral, auth) {
+  const role = String(auth.profile?.role || '');
+  if (['admin', 'coordinator', 'beds'].includes(role)) return true;
+  if (role !== 'doctor') return false;
+  const userId = String(auth.authUser?.id || '');
+  if ([referral?.created_by, referral?.assigned_doctor_id].map(String).includes(userId)) return true;
+  const department = String(auth.profile?.department || '');
+  return Boolean(department && [referral?.target_specialty, referral?.specialty].map(String).includes(department));
+}
+function referralMagicMatches(contentType, body) {
+  if (contentType === 'application/pdf') return ACCEPTANCE_MAGIC['application/pdf'](body);
+  if (contentType === 'image/jpeg') return ACCEPTANCE_MAGIC['image/jpeg'](body);
+  if (contentType === 'image/png') return ACCEPTANCE_MAGIC['image/png'](body);
+  return contentType === 'image/webp' && body.length >= 12 && body.subarray(0, 4).toString('ascii') === 'RIFF' && body.subarray(8, 12).toString('ascii') === 'WEBP';
+}
+async function handleRegularReferral(req, res, auth, context, id) {
+  if (context.category !== 'referral_attachment' || !context.referralId) return send(res, 400, JSON.stringify({ error: 'مرفق الإحالة يتطلب referral_id وcategory=referral_attachment' }));
+  const referral = await regularReferral(context.referralId);
+  if (!referral) return send(res, 404, JSON.stringify({ error: 'الإحالة غير موجودة' }));
+  if (!canAccessRegularReferral(referral, auth)) return send(res, 403, JSON.stringify({ error: 'لا تملك صلاحية هذه الإحالة' }));
+  const storagePath = referralStoragePath(context.referralId, id);
+  if (req.method === 'PUT' || req.method === 'POST') {
+    const role = String(auth.profile?.role || '');
+    const userId = String(auth.authUser?.id || '');
+    if (role === 'doctor' && String(referral.created_by || '') !== userId) return send(res, 403, JSON.stringify({ error: 'رفع مرفق الإحالة متاح لمنشئها فقط للطبيب' }));
+    const contentType = String(req.headers['content-type'] || 'application/octet-stream').split(';')[0].toLowerCase();
+    if (!['application/pdf', 'image/jpeg', 'image/png', 'image/webp'].includes(contentType)) return send(res, 415, JSON.stringify({ error: 'نوع مرفق الإحالة غير مسموح' }));
+    const body = await readBody(req);
+    if (!body.length || body.length > MAX_BYTES) return send(res, 413, JSON.stringify({ error: 'حجم الملف غير صالح' }));
+    if (!referralMagicMatches(contentType, body)) return send(res, 415, JSON.stringify({ error: 'محتوى الملف لا يطابق نوعه المعلن' }));
+    const { error } = await supabase.storage.from(BUCKET).upload(storagePath, body, { contentType, upsert: false, cacheControl: '3600' });
+    if (error) {
+      if (String(error.message || '').toLowerCase().includes('already exists')) return send(res, 409, JSON.stringify({ error: 'مرفق الإحالة موجود مسبقاً' }));
+      throw error;
+    }
+    return send(res, 200, JSON.stringify({ ok: true, id, attachment: { id, category: 'referral_attachment', referral_id: context.referralId, original_name: originalNameFrom(req, id), mime_type: contentType, size: body.length, uploaded_by: auth.authUser.id, uploaded_at: new Date().toISOString() } }));
+  }
+  if (req.method === 'GET') {
+    const { data, error } = await supabase.storage.from(BUCKET).download(storagePath);
+    if (error || !data) return send(res, 404, JSON.stringify({ error: 'مرفق الإحالة غير موجود' }));
+    const buf = Buffer.from(await data.arrayBuffer()); res.statusCode = 200; res.setHeader('Content-Type', data.type || 'application/octet-stream'); res.setHeader('Content-Length', String(buf.length)); res.setHeader('Cache-Control', 'private, no-store'); return res.end(buf);
+  }
+  if (req.method === 'DELETE') {
+    const { error } = await supabase.storage.from(BUCKET).remove([storagePath]);
+    if (error && !String(error.message || '').toLowerCase().includes('not found')) throw error;
+    return send(res, 200, JSON.stringify({ ok: true, id, category: 'referral_attachment' }));
+  }
+  res.setHeader('Allow', 'GET, PUT, POST, DELETE'); return send(res, 405, JSON.stringify({ error: 'method not allowed' }));
+}
+
 async function handleOutgoing(req, res, auth, context, id) {
   if (context.category !== 'acceptance_letter' || !context.referralId) return send(res, 400, JSON.stringify({ error: 'خطاب القبول يتطلب referral_id وcategory=acceptance_letter' }));
   const referral = await outgoingReferral(context.referralId);
@@ -96,7 +153,9 @@ module.exports = async function handler(req, res) {
     const auth = await requireUser(req, { roles: ['admin', 'coordinator', 'doctor', 'beds'] });
     if (!auth.ok) return send(res, auth.status, JSON.stringify({ error: auth.error }));
     const outgoing = outgoingContextFrom(req); if (!outgoing) return send(res, 400, JSON.stringify({ error: 'سياق المرفق غير صالح' }));
-    if (outgoing.category) return handleOutgoing(req, res, auth, outgoing, id);
+    if (outgoing.category === 'acceptance_letter') return handleOutgoing(req, res, auth, outgoing, id);
+    if (outgoing.category === 'referral_attachment') return handleRegularReferral(req, res, auth, outgoing, id);
+    if (outgoing.category) return send(res, 400, JSON.stringify({ error: 'فئة المرفق غير معروفة' }));
     if (!conversationId) return send(res, 400, JSON.stringify({ error: 'conversation_id مطلوب للتحقق من عضوية المرفق' }));
     if (!(await isMember(conversationId, auth.authUser.id))) return send(res, 403, JSON.stringify({ error: 'لا تملك عضوية هذه المحادثة' }));
     let record = await attachmentFor(path);
