@@ -321,6 +321,21 @@ table.t th{background:#f2f7f5;color:#527068}table.t tr:hover td{background:#f7fb
 .login-logos{gap:16px;flex-wrap:wrap;justify-content:center;padding:4px 0 18px}
 .login-logos img{max-width:30%;max-height:50px;object-fit:contain}
 @media(max-width:600px){.login-logos{gap:10px}.login-logos img{max-width:29%;max-height:42px}}
+
+/* Hail Health Cluster identity + bilingual shell */
+.language-switch-wrap{display:flex;justify-content:flex-start;margin:-8px 0 12px}
+.language-switch{background:#e8f3f0;color:#14594f;border:1px solid #c8e1d9;border-radius:999px;padding:7px 14px;font-size:12px;font-weight:800;cursor:pointer}
+.app-language-switch{background:rgba(255,255,255,.14);border-color:rgba(255,255,255,.32);color:#fff;white-space:nowrap}
+.cluster-identity{display:flex;flex-direction:column;gap:2px;text-align:center;color:#15594d;font-weight:800;font-size:14px;margin:0 0 10px}
+.cluster-identity span{font-size:9px;letter-spacing:2px;color:#78918a;font-weight:700}
+.login-logos{justify-content:center}
+.login-logos img{max-width:70%;max-height:42px;object-fit:contain}
+html[dir="ltr"] body{text-align:left}
+html[dir="ltr"] .login{text-align:left}
+html[dir="ltr"] .field label{text-align:left}
+html[dir="ltr"] .horizontal-nav #navArea{direction:ltr}
+html[dir="ltr"] .top{direction:ltr}
+html[dir="ltr"] .cluster-identity{text-align:center}
 </style>
 </head>
 <body>
@@ -328,9 +343,9 @@ table.t th{background:#f2f7f5;color:#527068}table.t tr:hover td{background:#f7fb
 <!-- شاشة الدخول -->
 <div id="loginScreen" class="lw">
   <div class="login">
-    <div class="login-logos" aria-label="الجهات والهوية المؤسسية">
-      <img src="assets/logos/makkah.png" alt="هوية التجمع الصحي بمكة" onerror="this.onerror=null;this.style.display='none'">
-      <img src="assets/logos/hospital.png" alt="مستشفى الملك فيصل بمكة" onerror="this.onerror=null;this.style.display='none'">
+    <div class="language-switch-wrap"><button type="button" class="language-switch" onclick="toggleLanguage()" aria-label="Switch language">English</button></div>
+    <div class="cluster-identity" aria-label="التجمع الصحي بحائل">التجمع الصحي بحائل <span>HAIL HEALTH CLUSTER</span></div>
+    <div class="login-logos" aria-label="الهوية الوطنية">
       <img src="assets/logos/vision.png" alt="رؤية السعودية 2030" onerror="this.onerror=null;this.style.display='none'">
     </div>
     <div class="brand"><div class="logo">و</div><div><h1>وَصْل</h1><p>نظام إدارة الإحالات الطبية</p></div></div>
@@ -359,6 +374,7 @@ table.t th{background:#f2f7f5;color:#527068}table.t tr:hover td{background:#f7fb
   <header class="top">
     <div class="tl"><div class="mini">و</div><div><strong style="color:var(--navy);font-size:19px">وَصْل</strong><small style="display:block;color:var(--muted);font-size:11px">نظام إدارة الإحالات الطبية</small></div></div>
     <div class="ur">
+      <button type="button" class="language-switch app-language-switch" onclick="toggleLanguage()" aria-label="Switch language">English</button>
       <button class="ghost xs" onclick="syncNow()" title="مزامنة الآن">🔄</button>
       <button class="primary xs hidden" id="topCreateReferral" onclick="showPage('create')" title="إحالة جديدة">＋ إحالة جديدة</button>
       <button class="notif-btn" onclick="showPage('notifications')" title="الإشعارات">🔔<span class="badge hidden" id="notifBadge">0</span></button>
@@ -387,6 +403,32 @@ table.t th{background:#f2f7f5;color:#527068}table.t tr:hover td{background:#f7fb
 <div id="toast" class="toast hidden"></div>
 
 <script>
+
+const WASL_EN = {
+  nav:{dashboard:'Dashboard',outgoing:'All Referrals',outgoing_referrals:'Outgoing',forward_consultant:'Doctor Accepted',consultation_ready:'Ready Consultations',need_supplement:'More Information',bed_decisions:'Bed Decisions',reports:'Reports',doctor_inbox:'Inbox',doctor_responded:'Responded',bed_requests:'Bed Requests',bed_management:'Bed Management',users:'Users',audit:'Audit Log',db_monitor:'Database & Sync',chat:'Messages',shifts:'On-call Roster',notifications:'Notifications'},
+  titles:{dashboard:['Dashboard','Overview of all referrals'],create:['New Referral','Register a new case'],outgoing:['All Referrals','All referrals in the system'],outgoing_referrals:['Outgoing','Outgoing referral workflow and follow-up'],forward_consultant:['Doctor Accepted','Referrals accepted by the doctor'],consultation_ready:['Ready Consultations','Consultations ready for printing and closure'],need_supplement:['More Information','Additional clinical information requested'],bed_decisions:['Bed Decisions','Pending bed decisions'],reports:['Reports','Completed referrals'],doctor_inbox:['Inbox','New referrals awaiting your decision'],doctor_responded:['Responded','Your previous decisions'],bed_requests:['Bed Requests','Requests awaiting bed decision'],bed_management:['Bed Management','Bed availability'],users:['Users','Account management'],audit:['Audit Log','System activity'],db_monitor:['Database & Sync','Server and synchronization status'],notifications:['Notifications','Alerts'],shifts:['On-call Roster','On-call schedule']},
+  login:{title:'Medical Referral Management System',heading:'Sign in',hint:'Enter your account credentials',username:'Username / Employee ID',password:'Password',forgot:'Forgot password?',click:'Click here',noAccount:"Don't have an account?",register:'Register',track:'Track registration request',trackClick:'Click here',loading:'Loading...'}
+};
+let WASL_LANG = localStorage.getItem('wasl_language') === 'en' ? 'en' : 'ar';
+function tNav(id, fallback){return WASL_LANG==='en'?(WASL_EN.nav[id]||fallback):fallback;}
+function toggleLanguage(){WASL_LANG=WASL_LANG==='ar'?'en':'ar';localStorage.setItem('wasl_language',WASL_LANG);applyLanguage();}
+function applyLanguage(){
+  const en=WASL_LANG==='en';document.documentElement.lang=en?'en':'ar';document.documentElement.dir=en?'ltr':'rtl';
+  const switchText=en?'العربية':'English';document.querySelectorAll('.language-switch').forEach(b=>b.textContent=switchText);
+  const brandP=document.querySelector('#loginScreen .brand p');if(brandP)brandP.textContent=en?WASL_EN.login.title:'نظام إدارة الإحالات الطبية';
+  const login=document.querySelector('#loginScreen');
+  if(login){
+    const h=login.querySelector('h3');if(h)h.textContent=en?WASL_EN.login.heading:'تسجيل الدخول';
+    const p=login.querySelector('h3 + p');if(p)p.textContent=en?WASL_EN.login.hint:'أدخل بيانات حسابك';
+    const labels=login.querySelectorAll('.field label');if(labels[0])labels[0].textContent=en?WASL_EN.login.username:'اسم المستخدم / رقم الوظيفي';if(labels[1])labels[1].textContent=en?WASL_EN.login.password:'كلمة المرور';
+    const lines=login.querySelectorAll('div[style*="text-align:center"]');if(lines[0])lines[0].childNodes[0].textContent=en?WASL_EN.login.forgot+' ':'نسيت كلمة المرور؟ ';if(lines[1])lines[1].childNodes[0].textContent=en?WASL_EN.login.noAccount+' ':'ليس لديك حساب؟ ';if(lines[2])lines[2].childNodes[0].textContent=en?'Track registration request? ':'متابعة طلب تسجيل؟ ';
+    const links=login.querySelectorAll('a');if(links[0])links[0].textContent=en?WASL_EN.login.click:'اضغط هنا';if(links[1])links[1].textContent=en?WASL_EN.login.register:'تسجيل جديد';if(links[2])links[2].textContent=en?WASL_EN.login.trackClick:'اضغط هنا';
+  }
+  const headerSub=document.querySelector('#app .tl small');if(headerSub)headerSub.textContent=en?WASL_EN.login.title:'نظام إدارة الإحالات الطبية';
+  const create=document.getElementById('topCreateReferral');if(create)create.textContent=en?'+ New Referral':'＋ إحالة جديدة';
+  if(typeof buildNav==='function'&&CURRENT_USER){buildNav();if(SECTION_MODAL_ACTIVE&&PAGE)openSectionModal(PAGE);}
+}
+
 // ═══════════════════════════════════════════════════════════════════
 // الثوابت والإعدادات
 // ═══════════════════════════════════════════════════════════════════
@@ -1820,41 +1862,41 @@ function buildNav() {
     const needSupp = refs.filter(x => x.status === 'info_requested');
     const bedDecisions = refs.filter(x => ['bed_approved', 'bed_rejected'].includes(x.status));
     items = [
-      { id: 'dashboard', icon: '▦', label: 'لوحة التحكم' },
-      { id: 'outgoing', icon: '↗', label: 'جميع الإحالات', count: active.length },
-      { id: 'outgoing_referrals', icon: '📤', label: 'الصادر', count: DATA.outgoing_referrals.filter(x => !['closed','accepted'].includes(x.status)).length },
-      { id: 'forward_consultant', icon: '⇄', label: 'قبول الطبيب', count: accepted.length },
-      { id: 'consultation_ready', icon: '📋', label: 'استشارات جاهزة', count: consultation.length },
-      { id: 'need_supplement', icon: '📝', label: 'استكمال مطلوب', count: needSupp.length },
-      ...(r !== 'coordinator' ? [{ id: 'bed_decisions', icon: '🛏', label: 'قرارات الأسرة', count: bedDecisions.length }] : []),
-      { id: 'reports', icon: '▤', label: 'التقارير' }
+      { id: 'dashboard', icon: '▦', label: tNav('dashboard','لوحة التحكم') },
+      { id: 'outgoing', icon: '↗', label: tNav('outgoing','جميع الإحالات'), count: active.length },
+      { id: 'outgoing_referrals', icon: '📤', label: tNav('outgoing_referrals','الصادر'), count: DATA.outgoing_referrals.filter(x => !['closed','accepted'].includes(x.status)).length },
+      { id: 'forward_consultant', icon: '⇄', label: tNav('forward_consultant','قبول الطبيب'), count: accepted.length },
+      { id: 'consultation_ready', icon: '📋', label: tNav('consultation_ready','استشارات جاهزة'), count: consultation.length },
+      { id: 'need_supplement', icon: '📝', label: tNav('need_supplement','استكمال مطلوب'), count: needSupp.length },
+      ...(r !== 'coordinator' ? [{ id: 'bed_decisions', icon: '🛏', label: tNav('bed_decisions','قرارات الأسرة'), count: bedDecisions.length }] : []),
+      { id: 'reports', icon: '▤', label: tNav('reports','التقارير') }
     ];
   } else if (r === 'doctor') {
     items = [
-      { id: 'doctor_inbox', icon: '✉', label: 'الوارد', count: refs.filter(x => isReferralInDoctorInbox(x)).length },
-      { id: 'doctor_responded', icon: '✓', label: 'تم الرد عليها', count: refs.filter(x => hasDoctorResponded(x, CURRENT_USER.id)).length },
+      { id: 'doctor_inbox', icon: '✉', label: tNav('doctor_inbox','الوارد'), count: refs.filter(x => isReferralInDoctorInbox(x)).length },
+      { id: 'doctor_responded', icon: '✓', label: tNav('doctor_responded','تم الرد عليها'), count: refs.filter(x => hasDoctorResponded(x, CURRENT_USER.id)).length },
       { id: 'outgoing_referrals', icon: '📤', label: 'الصادر', count: DATA.outgoing_referrals.filter(x => x.created_by === CURRENT_USER.id && !['closed','accepted'].includes(x.status)).length }
     ];
   } else if (r === 'beds') {
-    items = [{ id: 'bed_requests', icon: '▣', label: 'طلبات الأسرة', count: refs.filter(x => x.status === 'awaiting_bed').length }, { id: 'bed_management', icon: '🛏', label: 'إدارة الأسرة' }];
+    items = [{ id: 'bed_requests', icon: '▣', label: tNav('bed_requests','طلبات الأسرة'), count: refs.filter(x => x.status === 'awaiting_bed').length }, { id: 'bed_management', icon: '🛏', label: tNav('bed_management','إدارة الأسرة') }];
   }
 
   if (r === 'admin') {
     const pendingCount = DATA.users.filter(u => u.pending_approval).length;
     items.push({ id: 'bed_management', icon: '🛏', label: 'إدارة الأسرة' });
-    items.push({ id: 'users', icon: '👥', label: 'المستخدمون', count: pendingCount });
-    items.push({ id: 'audit', icon: '📋', label: 'سجل التدقيق' });
-    items.push({ id: 'db_monitor', icon: '💾', label: 'مراقبة القاعدة والمزامنة' });
+    items.push({ id: 'users', icon: '👥', label: tNav('users','المستخدمون'), count: pendingCount });
+    items.push({ id: 'audit', icon: '📋', label: tNav('audit','سجل التدقيق') });
+    items.push({ id: 'db_monitor', icon: '💾', label: tNav('db_monitor','مراقبة القاعدة والمزامنة') });
   }
 
   const topCreate = $('topCreateReferral');
   if (topCreate) topCreate.classList.toggle('hidden', !canCreateReferral());
 
   const chatUnread = getTotalUnreadChats();
-  items.push({ id: 'chat', icon: '💬', label: 'المحادثات', count: chatUnread });
-  items.push({ id: 'shifts', icon: '🗓', label: 'المناوبون' });
+  items.push({ id: 'chat', icon: '💬', label: tNav('chat','المحادثات'), count: chatUnread });
+  items.push({ id: 'shifts', icon: '🗓', label: tNav('shifts','المناوبون') });
   if (['coordinator', 'admin', 'doctor', 'beds'].includes(r)) {
-    items.push({ id: 'notifications', icon: '🔔', label: 'الإشعارات', count: unread });
+    items.push({ id: 'notifications', icon: '🔔', label: tNav('notifications','الإشعارات'), count: unread });
   }
 
   $('navArea').innerHTML = items.map(x => `<button class="nav ${PAGE === x.id ? 'active' : ''}" onclick="showPage('${x.id}')">${x.icon} ${x.label}${x.count ? ` <span class="count">${x.count}</span>` : ''}</button>`).join('');
@@ -1913,7 +1955,7 @@ function dismissSectionModal() {
   unlockModalBody();
 }
 function openSectionModal(p) {
-  const [title, subtitle] = SECTION_TITLES[p] || ['—', ''];
+  const [title, subtitle] = (WASL_LANG === 'en' ? (WASL_EN.titles[p] || SECTION_TITLES[p]) : SECTION_TITLES[p]) || ['—', ''];
   SECTION_MODAL_ACTIVE = true;
   SECTION_MODAL_PAGE = p;
   lockModalBody();
