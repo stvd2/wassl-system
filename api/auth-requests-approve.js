@@ -33,7 +33,12 @@ module.exports = async function handler(req, res) {
     if (found.error) throw found.error;
     if (!found.data) return json(res, 404, { error: 'الطلب غير موجود أو تمت معالجته', request_id: requestId });
     const request = found.data;
+    // Check the employee-number binding before touching Supabase Auth. This
+    // prevents a conflicting request from changing an existing account password.
+    const conflict = await admin.from('user_profiles').select('auth_user_id, employee_number').eq('employee_number', request.employee_number).maybeSingle();
+    if (conflict.error) throw conflict.error;
     const email = internalEmail(request.employee_number);
+    const existingProfileUserId = conflict.data?.auth_user_id || null;
     const suppliedPassword = String(b.temp_password || '');
     const password = suppliedPassword || temporaryPassword();
     if (password.length < 8 || password.length > 128) return json(res, 400, { error: 'كلمة المرور المؤقتة يجب أن تكون بين 8 و128 رمزاً', request_id: requestId });
@@ -42,6 +47,7 @@ module.exports = async function handler(req, res) {
     if (password.toLowerCase().includes(String(request.employee_number).toLowerCase())) return json(res, 400, { error: 'لا تستخدم رقم الموظف داخل كلمة المرور المؤقتة', request_id: requestId });
 
     let authUser = await existingAuthUser(email);
+    if (existingProfileUserId && authUser && existingProfileUserId !== authUser.id) return json(res, 409, { error: 'رقم الموظف مرتبط بحساب آخر', request_id: requestId });
     if (authUser) {
       const updated = await admin.auth.admin.updateUserById(authUser.id, { password, email_confirm: true, user_metadata: { employee_number: request.employee_number, full_name: request.full_name, mobile: request.mobile } });
       if (updated.error) throw updated.error;
@@ -52,8 +58,6 @@ module.exports = async function handler(req, res) {
       authUser = created.data.user;
     }
 
-    const conflict = await admin.from('user_profiles').select('auth_user_id, employee_number').eq('employee_number', request.employee_number).maybeSingle();
-    if (conflict.error) throw conflict.error;
     if (conflict.data && conflict.data.auth_user_id !== authUser.id) return json(res, 409, { error: 'رقم الموظف مرتبط بحساب آخر', request_id: requestId });
     const profileWrite = await admin.from('user_profiles').upsert({ auth_user_id: authUser.id, employee_number: request.employee_number, email, full_name: request.full_name, mobile: request.mobile, role, department, active: true, must_change_password: true, password_changed_at: null }, { onConflict: 'auth_user_id' });
     if (profileWrite.error) throw profileWrite.error;
