@@ -40,6 +40,28 @@ begin
 end;
 $$;
 
+-- تنظيف اختياري ومحدود للسجلات القديمة فقط. لا يُستدعى تلقائياً من الطلبات:
+-- يجب تشغيله بصلاحية service_role ضمن مهمة صيانة، مع إبقاء يوم كامل على الأقل.
+create or replace function public.wasl_cleanup_rate_limits(
+  p_retention_seconds integer default 86400
+) returns integer
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_deleted integer;
+begin
+  if p_retention_seconds < 86400 then
+    raise exception 'rate-limit retention must be at least 86400 seconds' using errcode = '22023';
+  end if;
+  delete from public.wasl_api_rate_limits
+  where window_start < now() - make_interval(secs => p_retention_seconds);
+  get diagnostics v_deleted = row_count;
+  return v_deleted;
+end;
+$$;
+
 create or replace function public.wasl_append_auth_notification(
   p_request_id uuid, p_full_name text, p_employee_number text, p_tracking_no text
 ) returns void
@@ -49,6 +71,7 @@ set search_path = public
 as $$
 declare
   v_notification jsonb;
+  v_updated integer;
 begin
   v_notification := jsonb_build_object(
     'id', 'N_AUTH_' || p_request_id::text, 'role', 'admin', 'user_id', null,
@@ -72,6 +95,11 @@ begin
     true
   ), updated_at = now()
   where id = 'main';
+  get diagnostics v_updated = row_count;
+  if v_updated <> 1 then
+    raise exception 'app_state.main is missing; registration notification was not persisted'
+      using errcode = 'P0001';
+  end if;
 end;
 $$;
 
@@ -134,6 +162,8 @@ $$;
 
 revoke all on function public.wasl_consume_rate_limit(text,integer,integer) from public, anon, authenticated;
 grant execute on function public.wasl_consume_rate_limit(text,integer,integer) to service_role;
+revoke all on function public.wasl_cleanup_rate_limits(integer) from public, anon, authenticated;
+grant execute on function public.wasl_cleanup_rate_limits(integer) to service_role;
 revoke all on function public.wasl_append_auth_notification(uuid,text,text,text) from public, anon, authenticated;
 grant execute on function public.wasl_append_auth_notification(uuid,text,text,text) to service_role;
 revoke all on function public.wasl_create_conversation(uuid,text,text,uuid[]) from public, anon, authenticated;
