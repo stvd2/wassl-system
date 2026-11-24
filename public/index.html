@@ -340,6 +340,7 @@ html[dir="ltr"] .field label{text-align:left}
 html[dir="ltr"] .horizontal-nav #navArea{direction:ltr}
 html[dir="ltr"] .top{direction:ltr}
 html[dir="ltr"] .cluster-identity{text-align:center}
+
 </style>
 </head>
 <body>
@@ -764,17 +765,28 @@ function openAttsDB() {
   });
   return ATTS_DB_PROMISE;
 }
+function attachmentUrl(id, context = {}) {
+  const query = new URLSearchParams({
+    ...(context.referral_id ? { referral_id: context.referral_id } : {}),
+    ...(context.category ? { category: context.category } : {}),
+    ...(context.conversation_id ? { conversation_id: context.conversation_id } : {})
+  });
+  return API_BASE + '/api/attachment?id=' + encodeURIComponent(id) + (query.toString() ? '&' + query.toString() : '');
+}
 async function attsPut(id, blob, context = {}) {
   if (blob.size > ATTACHMENT_MAX_BYTES) throw new Error('الحد الحالي للمرفق 4 م.ب؛ الملفات الأكبر تتطلب مسار رفع مباشر وآمن');
   ACTIVE_ATTACHMENT_UPLOADS++;
   try {
-    const res = await fetch(API_BASE + '/api/attachment?id=' + encodeURIComponent(id), {
+    const res = await fetch(attachmentUrl(id, context), {
       method: 'PUT',
-      headers: { 'Content-Type': blob.type || 'application/octet-stream', ...(context.referral_id ? {'X-Referral-Id': context.referral_id} : {}), ...(context.category ? {'X-Attachment-Category': context.category} : {}) },
+      headers: { 'Content-Type': blob.type || 'application/octet-stream', ...(context.referral_id ? {'X-Referral-Id': context.referral_id} : {}), ...(context.category ? {'X-Attachment-Category': context.category} : {}), ...(context.conversation_id ? {'X-Conversation-Id': context.conversation_id} : {}) },
       body: blob,
       cache: 'no-store'
     });
-    if (!res.ok) throw new Error(`فشل رفع المرفق (${res.status})`);
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({}));
+      throw new Error(body.error || `فشل رفع المرفق (${res.status})`);
+    }
     try {
       const db = await openAttsDB();
       await new Promise((resolve, reject) => {
@@ -786,10 +798,10 @@ async function attsPut(id, blob, context = {}) {
     } catch (e) { console.warn('[WASL] تعذر حفظ نسخة محلية للمرفق:', e.message); }
   } finally { ACTIVE_ATTACHMENT_UPLOADS--; }
 }
-async function attsGet(id) {
+async function attsGet(id, context = {}) {
   // المصدر المشترك أولاً حتى لا تعرض نسخة IndexedDB قديمة على جهاز آخر.
   try {
-    const remote = await fetch(API_BASE + '/api/attachment?id=' + encodeURIComponent(id), { cache: 'no-store' });
+    const remote = await fetch(attachmentUrl(id, context), { cache: 'no-store', headers: { ...(context.referral_id ? {'X-Referral-Id': context.referral_id} : {}), ...(context.category ? {'X-Attachment-Category': context.category} : {}), ...(context.conversation_id ? {'X-Conversation-Id': context.conversation_id} : {}) } });
     if (remote.ok) {
       const blob = await remote.blob();
       try { const db = await openAttsDB(); await new Promise((res, rej) => {
@@ -1171,6 +1183,14 @@ function syncToBackend() {
         if (!_syncBlocked && !_syncRetryTimer) _syncRetryTimer = setTimeout(() => { _syncRetryTimer = null; if (LOCAL_CHANGE_SERIAL !== CONFIRMED_CHANGE_SERIAL) syncToBackend(); }, 8000);
       });
   }, 400);
+}
+
+async function flushStateSync() {
+  if (_saveTimer) { clearTimeout(_saveTimer); _saveTimer = null; }
+  _syncQueued = true;
+  _saveInFlight = _saveInFlight.then(async () => { while (_syncQueued) { _syncQueued = false; await pushStateSnapshot(); } });
+  await _saveInFlight;
+  if (_syncBlocked || LOCAL_CHANGE_SERIAL !== CONFIRMED_CHANGE_SERIAL) throw new Error('تعذر تأكيد حفظ الإحالة على الخادم قبل رفع المرفق');
 }
 
 function writePendingJournal() {
@@ -1602,8 +1622,8 @@ async function sendChatMessage(chatId, text, files) {
   for (const file of validFiles) {
     try {
       const attId = 'ATT-' + uid();
-      await attsPut(attId, file);
-      stagedAttachments[attId] = { id: attId, referral_id: 'chat-' + chatId, name: file.name, type: file.type || 'application/octet-stream', size: file.size, uploaded_at: nowIso() };
+      await attsPut(attId, file, { conversation_id: chatId });
+      stagedAttachments[attId] = { id: attId, referral_id: 'chat-' + chatId, conversation_id: chatId, name: file.name, type: file.type || 'application/octet-stream', size: file.size, uploaded_at: nowIso() };
       msg.atts.push(attId);
     } catch(e) { return { ok: false, error: `فشل رفع ${file.name}: ${e.message}` }; }
   }
@@ -2342,10 +2362,13 @@ async function submitReferral(e) {
   const d = Object.fromEntries(fd);
   delete d.files; // لا نخزّن كائن الملفات داخل بيانات الإحالة (تُعالج الملفات بشكل منفصل)
   const targetSpecialty = (d.target_specialty || '').trim();
-  const consultDepts = [];
-  delete d.departments;
-  const submitBtn = $('submitBtn');
-  try {
+	  const consultDepts = [];
+	  delete d.departments;
+	  const submitBtn = $('submitBtn');
+	  let stagedAttachments = {};
+	  let referralPersisted = false;
+	  let referralId = null;
+	  try {
     const refNo = (d.ref_no || '').trim();
     if (!refNo) { toast('رقم الإحالة إلزامي', 'err'); return; }
     if (!d.priority) { toast('نوع الإحالة إلزامي', 'err'); return; }
@@ -2355,8 +2378,8 @@ async function submitReferral(e) {
     }
     CREATE_SUBMITTING = true;
     try { await openAttsDB(); } catch (dbErr) { console.warn('[WASL] تعذر التخزين المحلي للمرفقات:', dbErr.message); }
-    const id = 'WS-' + new Date().getFullYear() + '-' + uid();
-    const stagedAttachments = {};
+	    const id = 'WS-' + new Date().getFullYear() + '-' + uid();
+	    referralId = id;
     const r = {
       id, ...d, ref_no: refNo,
       age: d.age ? parseInt(d.age) : null,
@@ -2366,9 +2389,14 @@ async function submitReferral(e) {
       department_responses: [],
       status: 'awaiting_doctor',
       created_by: CURRENT_USER.id, created_at: nowIso(), updated_at: nowIso(),
-      assigned_doctor_id: null, attachment_ids: [], timeline: [], doctor_viewed_at: null,
-      departments: [targetSpecialty], opinions: []
-    };
+	      assigned_doctor_id: null, attachment_ids: [], timeline: [], doctor_viewed_at: null,
+	      opinions: []
+	    };
+    DATA.meta.seq++;
+    DATA.referrals.push(r);
+	    if (!saveData()) throw new Error('تعذر حفظ سجل الإحالة قبل رفع المرفقات');
+	    await flushStateSync();
+	    referralPersisted = true;
     const files = f.querySelector('[name=files]').files;
     if (files.length) {
       submitBtn.disabled = true;
@@ -2380,8 +2408,8 @@ async function submitReferral(e) {
         submitBtn.textContent = `⏳ رفع ${i+1}/${files.length}...`;
         try {
           const attId = 'ATT-' + uid();
-          await attsPut(attId, file);
-          stagedAttachments[attId] = { id: attId, referral_id: id, name: file.name, type: file.type, size: file.size, uploaded_at: nowIso() };
+          await attsPut(attId, file, { referral_id: id, category: 'referral_attachment' });
+          stagedAttachments[attId] = { id: attId, referral_id: id, category: 'referral_attachment', name: file.name, type: file.type, size: file.size, uploaded_at: nowIso() };
           r.attachment_ids.push(attId);
         } catch (err) { throw new Error(`فشل رفع "${file.name}": ${err.message}`); }
       }
@@ -2390,9 +2418,7 @@ async function submitReferral(e) {
     }
     const initState = 'awaiting_doctor';
     r.timeline.push({ ts: nowIso(), from: 'new', to: initState, user: CURRENT_USER.full_name, role: CURRENT_USER.role, user_id: CURRENT_USER.id, action: 'إنشاء الإحالة', details: { القسم_النهائي: targetSpecialty, الأقسام_المستشارة: consultDepts.join('، ') || '—' } });
-    DATA.meta.seq++;
     Object.assign(DATA.attachments, stagedAttachments);
-    DATA.referrals.push(r);
     if (consultDepts.length) {
       DATA.users.filter(u => u.role === 'doctor' && u.active && consultDepts.includes(u.department)).forEach(u => notifyUser(u.id, id, '🩺 إحالة جديدة بانتظار رأي قسمك'));
     } else {
@@ -2404,8 +2430,22 @@ async function submitReferral(e) {
     CREATE_SUBMITTING = false;
     closeModal();
     showPage('outgoing');
-  } catch (err) {
-    CREATE_SUBMITTING = false;
+	  } catch (err) {
+	    // لا تترك إحالة ناقصة أو مرفقات يتيمة إذا فشل أي رفع بعد الحفظ التمهيدي.
+	    if (referralPersisted && referralId) {
+	      DATA.referrals = DATA.referrals.filter(ref => ref.id !== referralId);
+	      Object.keys(stagedAttachments).forEach(attId => { delete DATA.attachments[attId]; });
+	      try { saveData(); } catch (rollbackErr) { console.warn('[WASL] تعذر حفظ تراجع الإحالة:', rollbackErr.message); }
+	      await Promise.all(Object.keys(stagedAttachments).map(async attId => {
+	        try {
+	          await fetch(API_BASE + '/api/attachment?id=' + encodeURIComponent(attId), {
+	            method: 'DELETE',
+	            headers: { 'X-Referral-Id': referralId, 'X-Attachment-Category': 'referral_attachment' }
+	          });
+	        } catch (deleteErr) { console.warn('[WASL] تعذر حذف مرفق الإحالة المرحلي:', deleteErr.message); }
+	      }));
+	    }
+	    CREATE_SUBMITTING = false;
     if (submitBtn) { submitBtn.disabled = false; submitBtn.textContent = '📤 حفظ وإرسال للطبيب'; }
     toast(err.message, 'err');
   }
@@ -3278,11 +3318,19 @@ body { font-family: 'Cairo', sans-serif; margin: 0; padding: 0; background: #fff
 // ═══════════════════════════════════════════════════════════════════
 // المرفقات
 // ═══════════════════════════════════════════════════════════════════
+function attachmentContext(meta) {
+  if (!meta) return {};
+  if (meta.category === 'acceptance_letter') return { referral_id: meta.referral_id, category: 'acceptance_letter' };
+  if (meta.category === 'referral_attachment' || (meta.referral_id && !String(meta.referral_id).startsWith('chat-'))) return { referral_id: meta.referral_id, category: 'referral_attachment' };
+  if (meta.conversation_id) return { conversation_id: meta.conversation_id };
+  if (String(meta.referral_id || '').startsWith('chat-')) return { conversation_id: String(meta.referral_id).slice(5) };
+  return {};
+}
 async function downloadAtt(attId) {
   const meta = DATA.attachments[attId];
   if (!meta) return toast('غير موجود', 'err');
   try {
-    let blob = await attsGet(attId);
+    let blob = await attsGet(attId, attachmentContext(meta));
     if (!blob) return toast('غير متاح', 'err');
     const url = URL.createObjectURL(blob);
     const el = document.createElement('a');
@@ -3295,7 +3343,7 @@ async function previewAtt(attId) {
   const meta = DATA.attachments[attId];
   if (!meta) return toast('غير موجود', 'err');
   try {
-    let blob = await attsGet(attId);
+    let blob = await attsGet(attId, attachmentContext(meta));
     if (!blob) return toast('غير متاح', 'err');
     const url = URL.createObjectURL(blob);
     const isImage = (meta.type || '').startsWith('image/');
@@ -3476,7 +3524,8 @@ function renderChatPage() {
 function loadChatImages() {
   document.querySelectorAll('#chatMsgs img[data-att]').forEach(async img => {
     try {
-      const blob = await attsGet(img.getAttribute('data-att'));
+      const id = img.getAttribute('data-att');
+      const blob = await attsGet(id, attachmentContext(DATA.attachments[id]));
       if (!blob || !img.isConnected) return;
       const url = URL.createObjectURL(blob);
       img.src = url;
@@ -3561,7 +3610,7 @@ function openChat(chatId) {
     const el = $('chatMsgs'); if (el) el.scrollTop = el.scrollHeight;
     document.querySelectorAll('img[data-att]').forEach(async img => {
       const id = img.getAttribute('data-att');
-      try { const blob = await attsGet(id); if (blob) img.src = URL.createObjectURL(blob); } catch(e) {}
+      try { const blob = await attsGet(id, attachmentContext(DATA.attachments[id])); if (blob) img.src = URL.createObjectURL(blob); } catch(e) {}
     });
   }, 50);
   buildNav();

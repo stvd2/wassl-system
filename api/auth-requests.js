@@ -8,31 +8,15 @@ const validEmployee = v => /^[A-Za-z0-9_.-]{3,30}$/.test(v);
 const validMobile = v => /^05\d{8}$/.test(v);
 function trackingNo() { return `REQ-${new Date().getFullYear()}-${crypto.randomBytes(4).toString('hex').toUpperCase()}`; }
 function publicRequest(row) { return { id: row.id, tracking_no: row.tracking_no, employee_number: row.employee_number, full_name: row.full_name, mobile: row.mobile, status: row.status, rejection_reason: row.rejection_reason, created_at: row.created_at, reviewed_at: row.reviewed_at }; }
-async function notifyAdmins(request) {
-  const current = await admin.from('app_state').select('data').eq('id', 'main').maybeSingle();
-  if (current.error || !current.data?.data) return;
-  const data = current.data.data;
-  const notifications = Array.isArray(data.notifications) ? [...data.notifications] : [];
-  notifications.unshift({
-    id: `N_AUTH_${request.id}`,
-    role: 'admin',
-    user_id: null,
-    referral_id: null,
-    title: 'طلب تسجيل موظف جديد',
-    message: `${request.full_name} (${request.employee_number}) — ${request.tracking_no}`,
-    type: 'user_registration',
-    read: false,
-    created_at: new Date().toISOString(),
-    from_user: 'النظام'
-  });
-  data.notifications = notifications.slice(0, 1000);
-  await admin.from('app_state').update({ data, updated_at: new Date().toISOString() }).eq('id', 'main');
-}
-
 module.exports = async function handler(req, res) {
   try {
     if (req.method === 'POST') {
       const b = req.body || {};
+      const forwardedIp = String(req.headers['x-real-ip'] || req.socket?.remoteAddress || 'unknown').split(',')[0].trim();
+      const rateKey = crypto.createHash('sha256').update(forwardedIp).digest('hex');
+      const rate = await admin.rpc('wasl_consume_rate_limit', { p_key_hash: rateKey, p_limit: 5, p_window_seconds: 900 });
+      if (rate.error) throw rate.error;
+      if (rate.data !== true) return json(res, 429, { error: 'تم تجاوز عدد محاولات التسجيل. حاول بعد 15 دقيقة.' });
       const employee_number = String(b.employee_number || '').trim();
       const full_name = String(b.full_name || '').trim();
       const mobile = normalizeMobile(b.mobile);
@@ -49,8 +33,15 @@ module.exports = async function handler(req, res) {
       if (mobileTaken.error) throw mobileTaken.error;
       if (mobileTaken.data) return json(res, 409, { error: 'رقم الجوال مسجل مسبقاً' });
       const row = await admin.from('auth_requests').insert({ tracking_no: trackingNo(), employee_number, full_name, mobile }).select().single();
-      if (row.error) throw row.error;
-      await notifyAdmins(row.data);
+      if (row.error) {
+        if (row.error.code === '23505') return json(res, 409, { error: 'يوجد طلب أو حساب مسجل بهذه البيانات مسبقاً' });
+        throw row.error;
+      }
+      const notification = await admin.rpc('wasl_append_auth_notification', { p_request_id: row.data.id, p_full_name: full_name, p_employee_number: employee_number, p_tracking_no: row.data.tracking_no });
+      if (notification.error) {
+        await admin.from('auth_requests').delete().eq('id', row.data.id).eq('status', 'pending');
+        throw notification.error;
+      }
       return json(res, 201, { ok: true, request: publicRequest(row.data) });
     }
     const auth = await requireUser(req, { roles: ['admin'] });
