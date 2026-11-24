@@ -36,10 +36,6 @@ module.exports = async function handler(req, res) {
     if (found.error) throw found.error;
     if (!found.data) return json(res, 404, { error: 'الطلب غير موجود أو تمت معالجته', request_id: requestId });
     const request = found.data;
-    const claim = await admin.from('auth_requests').update({ status: 'processing' }).eq('id', id).eq('status', 'pending').select('id').maybeSingle();
-    if (claim.error) throw claim.error;
-    if (!claim.data) return json(res, 409, { error: 'طلب التسجيل قيد المعالجة أو تمت معالجته بالفعل', request_id: requestId });
-    claimedRequestId = id;
     // Check the employee-number binding before touching Supabase Auth. This
     // prevents a conflicting request from changing an existing account password.
     const conflict = await admin.from('user_profiles').select('auth_user_id, employee_number').eq('employee_number', request.employee_number).maybeSingle();
@@ -52,6 +48,13 @@ module.exports = async function handler(req, res) {
     if (!/[A-Z]/.test(password) || !/[a-z]/.test(password) || !/[0-9]/.test(password)) return json(res, 400, { error: 'كلمة المرور المؤقتة يجب أن تحتوي على حرف كبير وحرف صغير ورقم', request_id: requestId });
     if (/^\s|\s$/.test(password)) return json(res, 400, { error: 'لا تبدأ أو تنتهي كلمة المرور المؤقتة بمسافة', request_id: requestId });
     if (password.toLowerCase().includes(String(request.employee_number).toLowerCase())) return json(res, 400, { error: 'لا تستخدم رقم الموظف داخل كلمة المرور المؤقتة', request_id: requestId });
+
+    const staleBefore = new Date(Date.now() - 15 * 60 * 1000).toISOString();
+    await admin.from('auth_requests').update({ status: 'pending' }).eq('status', 'processing').lt('updated_at', staleBefore);
+    const claim = await admin.from('auth_requests').update({ status: 'processing' }).eq('id', id).eq('status', 'pending').select('id').maybeSingle();
+    if (claim.error) throw claim.error;
+    if (!claim.data) return json(res, 409, { error: 'طلب التسجيل قيد المعالجة أو تمت معالجته بالفعل', request_id: requestId });
+    claimedRequestId = id;
 
     let authUser = await existingAuthUser(email);
     if (authUser) {
