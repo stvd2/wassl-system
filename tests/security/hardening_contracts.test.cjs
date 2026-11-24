@@ -79,6 +79,18 @@ test('acceptance letters require a real outgoing referral and coordinator/admin 
   assert.match(source, /matchesMagic\(contentType, body\)/);
 });
 
+test('regular referral attachments use a separate verified storage context', () => {
+  const api = read('api/attachment.js');
+  const page = read('public/index.html');
+  assert.match(api, /category !== 'referral_attachment'/);
+  assert.match(api, /referrals\/\$\{referralId\}\/\$\{id\}/);
+  assert.match(api, /regularReferral\(context\.referralId\)/);
+  assert.match(api, /canAccessRegularReferral\(referral, auth\)/);
+  assert.match(api, /upsert: false/);
+  assert.match(page, /attsPut\(attId, file, \{ referral_id: id, category: 'referral_attachment' \}\)/);
+  assert.match(page, /await flushStateSync\(\)/);
+});
+
 test('legacy service-role state routes fail closed', () => {
   const source = read('backend/server.js');
   assert.match(source, /status\(410\)/);
