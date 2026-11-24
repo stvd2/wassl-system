@@ -1,6 +1,6 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { validateOutgoingState } = require('../../api/outgoing-validation');
+const { validateOutgoingState } = require('../../lib/outgoing-validation');
 const base = item => ({meta:{version:'v6'},attachments:{},outgoing_referrals:[{id:'OUT-1',case_type:'إنقاذ حياة',ministerial_code:'LIFE-1',...item}]});
 test('rejects life-saving outgoing referral without ministry code',()=>assert.throws(()=>validateOutgoingState(base({ministerial_code:''})),/الكود الوزاري/));
 test('rejects duplicate ministry referral numbers case-insensitively',()=>assert.throws(()=>validateOutgoingState({attachments:{},outgoing_referrals:[{id:'OUT-1',case_type:'عادية',ministerial_ref_no:'MIN-1'},{id:'OUT-2',case_type:'عادية',ministerial_ref_no:'min-1'}]}),/مكرر/));

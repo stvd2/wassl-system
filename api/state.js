@@ -59,7 +59,7 @@ const PRIVATE_USER_FIELDS = new Set([
   'password', 'password_hash', 'hash', 'salt', 'password_history',
   'failed_attempts', 'locked_until', 'temporary_password', 'plain_' + 'password'
 ]);
-const { validateOutgoingState } = require('./outgoing-validation');
+const { validateOutgoingState } = require('../lib/outgoing-validation');
 function validateOutgoingPermissions(current, next, auth) {
   const before = new Map((current?.outgoing_referrals || []).map(item => [String(item.id), item]));
   const after = new Map((next?.outgoing_referrals || []).map(item => [String(item.id), item]));
