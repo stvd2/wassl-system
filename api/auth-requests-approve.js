@@ -52,15 +52,9 @@ module.exports = async function handler(req, res) {
       // Reconcile legacy/orphaned accounts explicitly instead of guessing ownership.
       return json(res, 409, { error: existingProfileUserId === authUser.id ? 'يوجد حساب مرتبط مسبقاً؛ راجع الحساب بدلاً من إعادة تعيين كلمة مروره عبر طلب التسجيل' : 'يوجد حساب Auth بهذا المعرّف دون ربط موثوق؛ يلزم التحقق اليدوي قبل الاعتماد', request_id: requestId });
     }
-    if (false) {
-      const updated = await admin.auth.admin.updateUserById(authUser.id, { password, email_confirm: true, user_metadata: { employee_number: request.employee_number, full_name: request.full_name, mobile: request.mobile } });
-      if (updated.error) throw updated.error;
-      authUser = updated.data.user;
-    } else {
-      const created = await admin.auth.admin.createUser({ email, password, email_confirm: true, user_metadata: { employee_number: request.employee_number, full_name: request.full_name, mobile: request.mobile } });
-      if (created.error) throw created.error;
-      authUser = created.data.user;
-    }
+    const created = await admin.auth.admin.createUser({ email, password, email_confirm: true, user_metadata: { employee_number: request.employee_number, full_name: request.full_name, mobile: request.mobile } });
+    if (created.error) throw created.error;
+    authUser = created.data.user;
 
     const profileWrite = await admin.from('user_profiles').upsert({ auth_user_id: authUser.id, employee_number: request.employee_number, email, full_name: request.full_name, mobile: request.mobile, role, department, active: true, must_change_password: true, password_changed_at: null }, { onConflict: 'auth_user_id' });
     if (profileWrite.error) throw profileWrite.error;
