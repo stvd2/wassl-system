@@ -234,6 +234,7 @@ input[dir="ltr"],select[dir="ltr"],textarea[dir="ltr"],.ltr{direction:ltr;text-a
 .dept-resp .dr-meta{font-size:11px;color:var(--teal);margin-bottom:6px}
 .dept-resp p{margin:0;font-size:12.5px;color:var(--text);line-height:1.7;white-space:pre-wrap;background:#f7f9fa;padding:8px 10px;border-radius:6px}
 
+.outgoing-hero{background:linear-gradient(135deg,#123047,#087f78);color:#fff;border-radius:16px;padding:20px;display:flex;justify-content:space-between;align-items:center;gap:16px;flex-wrap:wrap;margin-bottom:16px}.outgoing-hero h3{margin:0 0 4px}.outgoing-hero p{margin:0;opacity:.82}.muted{color:var(--muted);font-size:11px;margin-top:3px}.overdue{color:#b91c1c;font-weight:800;font-size:11px;margin-top:4px}.outgoing-life{background:#fff4f4!important;border-right:4px solid #b91c1c}.outgoing-life td{background:#fff7f7!important}.outgoing-modal{border-top:5px solid var(--teal)}.outgoing-dashboard{border-top:3px solid var(--teal)}.outgoing-filters{margin:14px 0;align-items:center}.outgoing-filters input{max-width:none}
 .mobile-bottom-nav{display:none}
 @media(max-width:900px){
   body{overflow-x:hidden}
@@ -536,6 +537,29 @@ const REFERRAL_TYPE_META = {
 };
 
 const DEPARTMENTS = ['الباطنة','العناية المركزة','العظام','القلب','العيادات','الجراحة العامة','جراحة المخ والأعصاب','الصدرية','الكلى'];
+// قاموس الصادر الطبي ثنائي اللغة — القيم القديمة تبقى صالحة ولا تُحوّل قسرياً.
+const MEDICAL_SPECIALTIES = [
+  ['الباطنة','Internal Medicine'],['أمراض القلب','Cardiology'],['أمراض الدم','Hematology'],['الأورام','Oncology'],
+  ['الغدد الصماء والسكري','Endocrinology & Diabetes'],['الجهاز الهضمي والكبد','Gastroenterology & Hepatology'],['الأمراض المعدية','Infectious Diseases'],
+  ['أمراض الكلى','Nephrology'],['أمراض الصدر','Pulmonology'],['الروماتيزم','Rheumatology'],['الأعصاب','Neurology'],
+  ['جراحة المخ والأعصاب','Neurosurgery'],['الجراحة العامة','General Surgery'],['جراحة القلب والصدر','Cardiothoracic Surgery'],
+  ['جراحة الأوعية الدموية','Vascular Surgery'],['جراحة الأطفال','Pediatric Surgery'],['جراحة التجميل والحروق','Plastic & Burn Surgery'],
+  ['العظام','Orthopedics'],['المسالك البولية','Urology'],['النساء والولادة','Obstetrics & Gynecology'],['الأطفال','Pediatrics'],
+  ['حديثو الولادة','Neonatology'],['العناية المركزة','Intensive Care'],['طب الطوارئ','Emergency Medicine'],
+  ['العيون','Ophthalmology'],['الأنف والأذن والحنجرة','ENT'],['الجلدية','Dermatology'],['الطب النفسي','Psychiatry'],
+  ['التخدير','Anesthesiology'],['الأشعة التشخيصية','Diagnostic Radiology'],['الأشعة التداخلية','Interventional Radiology'],
+  ['الطب النووي','Nuclear Medicine'],['الطب الطبيعي وإعادة التأهيل','Physical Medicine & Rehabilitation'],['طب الأسرة','Family Medicine'],
+  ['طب المجتمع والصحة العامة','Community & Public Health'],['طب الأسنان','Dentistry'],['المختبرات الطبية','Medical Laboratory'],
+  ['التمريض','Nursing'],['أخرى','Other']
+];
+const SPECIALTY_OPTIONS = MEDICAL_SPECIALTIES.map(([ar,en]) => ({ ar, en, label: `${ar} / ${en}` }));
+const OUTGOING_TYPES = ['عادية','عيادات','طارئة','إنقاذ حياة'];
+const OUTGOING_STATES = {
+  draft: {label:'مسودة', cls:'p-doc'}, pending_coordinator:{label:'بانتظار المنسق', cls:'p-warn'},
+  issued: {label:'صادرة رسمياً', cls:'p-acc'}, follow_up:{label:'متابعة مطلوبة', cls:'p-purple'},
+  accepted: {label:'تم القبول', cls:'p-done'}, closed:{label:'مغلقة', cls:'p-done'}
+};
+const OUTGOING_SLA_HOURS = { 'عادية':72, 'عيادات':120, 'طارئة':6, 'إنقاذ حياة':1 };
 
 const WARD_OPTIONS = {
   'طارئ':         ['طوارئ', 'عناية مركزة', 'قسم عادي'],
@@ -658,13 +682,13 @@ function openAttsDB() {
   });
   return ATTS_DB_PROMISE;
 }
-async function attsPut(id, blob) {
+async function attsPut(id, blob, context = {}) {
   if (blob.size > ATTACHMENT_MAX_BYTES) throw new Error('الحد الحالي للمرفق 4 م.ب؛ الملفات الأكبر تتطلب مسار رفع مباشر وآمن');
   ACTIVE_ATTACHMENT_UPLOADS++;
   try {
     const res = await fetch(API_BASE + '/api/attachment?id=' + encodeURIComponent(id), {
       method: 'PUT',
-      headers: { 'Content-Type': blob.type || 'application/octet-stream' },
+      headers: { 'Content-Type': blob.type || 'application/octet-stream', ...(context.referral_id ? {'X-Referral-Id': context.referral_id} : {}), ...(context.category ? {'X-Attachment-Category': context.category} : {}) },
       body: blob,
       cache: 'no-store'
     });
@@ -1017,7 +1041,7 @@ function mergeStateSnapshots(latest, local, base) {
     return out;
   };
   const merged = JSON.parse(JSON.stringify(latest));
-  for (const key of ['users', 'referrals', 'beds', 'audit', 'notifications', 'chats', 'shifts']) {
+  for (const key of ['users', 'referrals', 'outgoing_referrals', 'beds', 'audit', 'notifications', 'chats', 'shifts']) {
     merged[key] = mergeList(key, key === 'chats' ? mergeChat : key === 'users' ? mergeFields : key === 'notifications' ? mergeNotification : null);
   }
   // Two devices can independently add distinct IDs with the same business key.
@@ -1162,12 +1186,13 @@ async function syncNow() {
 function initData() {
   return {
     meta: { version: 'v6', sync_revision: 0, created_at: nowIso(), seq: 0, auditSeq: 0, notifSeq: 0 },
-    users: [], referrals: [], beds: [], audit: [], attachments: {}, notifications: [], chats: [], shifts: []
+    users: [], referrals: [], beds: [], outgoing_referrals: [], audit: [], attachments: {}, notifications: [], chats: [], shifts: []
   };
 }
 
 function migrateOldStates() {
   let changed = false;
+  if (!Array.isArray(DATA.outgoing_referrals)) { DATA.outgoing_referrals = []; changed = true; }
   const STATE_MAP = {
     'awaiting_opinions':  'awaiting_doctor',
     'supplement_needed':  'info_requested',
@@ -1761,6 +1786,7 @@ function buildNav() {
     items = [
       { id: 'dashboard', icon: '▦', label: 'لوحة التحكم' },
       { id: 'outgoing', icon: '↗', label: 'جميع الإحالات', count: active.length },
+      { id: 'outgoing_referrals', icon: '📤', label: 'الصادر', count: DATA.outgoing_referrals.filter(x => !['closed','accepted'].includes(x.status)).length },
       { id: 'forward_consultant', icon: '⇄', label: 'قبول الطبيب', count: accepted.length },
       { id: 'consultation_ready', icon: '📋', label: 'استشارات جاهزة', count: consultation.length },
       { id: 'need_supplement', icon: '📝', label: 'استكمال مطلوب', count: needSupp.length },
@@ -1770,7 +1796,8 @@ function buildNav() {
   } else if (r === 'doctor') {
     items = [
       { id: 'doctor_inbox', icon: '✉', label: 'الوارد', count: refs.filter(x => isReferralInDoctorInbox(x)).length },
-      { id: 'doctor_responded', icon: '✓', label: 'تم الرد عليها', count: refs.filter(x => hasDoctorResponded(x, CURRENT_USER.id)).length }
+      { id: 'doctor_responded', icon: '✓', label: 'تم الرد عليها', count: refs.filter(x => hasDoctorResponded(x, CURRENT_USER.id)).length },
+      { id: 'outgoing_referrals', icon: '📤', label: 'الصادر', count: DATA.outgoing_referrals.filter(x => x.created_by === CURRENT_USER.id && !['closed','accepted'].includes(x.status)).length }
     ];
   } else if (r === 'beds') {
     items = [{ id: 'bed_requests', icon: '▣', label: 'طلبات الأسرة', count: refs.filter(x => x.status === 'awaiting_bed').length }, { id: 'bed_management', icon: '🛏', label: 'إدارة الأسرة' }];
@@ -1825,6 +1852,7 @@ const SECTION_TITLES = {
   dashboard:['لوحة التحكم','نظرة شاملة على جميع الإحالات'],
   create:['إحالة جديدة','تسجيل حالة جديدة'],
   outgoing:['جميع الإحالات','كل الإحالات في النظام'],
+  outgoing_referrals:['الصادر','دورة الإحالة الصادرة — الاستلام والإصدار والمتابعة'],
   forward_consultant:['قبول الطبيب','إحالات قَبِلها الطبيب — بانتظار توجيهك'],
   consultation_ready:['الاستشارات الجاهزة','استشارات جاهزة للطباعة والإغلاق'],
   need_supplement:['استكمال مطلوب','الطبيب يطلب معلومات إضافية'],
@@ -1893,6 +1921,7 @@ function showPage(p) {
 
 function renderPage(p) {
   if (p === 'dashboard') return renderDashboard();
+  if (p === 'outgoing_referrals') return renderOutgoingReferrals();
   if (p === 'create') return openCreateReferralModal();
   if (p === 'users') return renderUsers();
   if (p === 'audit') return renderAudit();
@@ -1912,6 +1941,89 @@ function refreshCurrentView() {
   if (PAGE === 'create' || $('modalRoot')?.querySelector('form') || document.activeElement?.matches('input,textarea,select')) return;
   if ($('content')) renderPage(PAGE);
 }
+
+// ═══════════════════════════════════════════════════════════════════
+// الصادر — دورة مستقلة متوافقة مع الإحالات القديمة
+// ═══════════════════════════════════════════════════════════════════
+function outgoingSla(r) {
+  const hours = (Date.now() - new Date(r.issued_at || r.created_at).getTime()) / 3600000;
+  const limit = OUTGOING_SLA_HOURS[r.case_type] || 72;
+  return { hours, limit, overdue: hours > limit && !['accepted','closed'].includes(r.status) };
+}
+function specialtyOptionsHtml(selected='') { return SPECIALTY_OPTIONS.map(x => `<option value="${esc(x.label)}" ${selected === x.label || selected === x.ar ? 'selected' : ''}>${esc(x.label)}</option>`).join(''); }
+function outgoingTypeChanged(sel) {
+  const box=$('lifeCodeBox'), input=$('ministerialCode'); if (!box || !input) return;
+  const life=sel.value==='إنقاذ حياة'; box.classList.toggle('hidden',!life); input.required=life;
+  if (life) { input.focus({preventScroll:true}); $('outgoingPriorityHint')?.classList.remove('hidden'); }
+  else { input.value=''; $('outgoingPriorityHint')?.classList.add('hidden'); }
+}
+function openCreateOutgoingModal() {
+  if (!['doctor','coordinator','admin'].includes(CURRENT_USER?.role)) return toast('غير مصرح', 'err');
+  lockModalBody();
+  $('modalRoot').innerHTML=`<div class="modal-back" onclick="if(event.target===this)closeModal()"><div class="modal outgoing-modal"><div class="mh"><div><h3>📤 إحالة صادرة جديدة</h3><small>تُحفظ في أرشيف الصادر دون تغيير الإحالات القديمة</small></div><button class="ghost sm" onclick="closeModal()">✕ إغلاق</button></div>
+  <form id="outgoingForm" class="grid2" onsubmit="submitOutgoing(event)">
+    <div class="field"><label>اسم المريض *</label><input name="patient_name" required></div><div class="field"><label>رقم الملف *</label><input name="mrn" required dir="ltr"></div>
+    <div class="field"><label>العمر *</label><input name="age" type="number" min="0" max="150" required></div><div class="field"><label>التخصص المطلوب *</label><select name="specialty" required><option value="">— اختر التخصص —</option>${specialtyOptionsHtml()}</select></div>
+    <div class="field full"><label>نوع الحالة *</label><select name="case_type" required onchange="outgoingTypeChanged(this)"><option value="">— اختر —</option>${OUTGOING_TYPES.map(x=>`<option value="${x}">${x}</option>`).join('')}</select><div id="outgoingPriorityHint" class="notice danger hidden">🚨 إنقاذ حياة: أولوية قصوى — يجب إدخال الكود الوزاري فوراً.</div></div>
+    <div id="lifeCodeBox" class="field full hidden"><label>الكود الوزاري *</label><input id="ministerialCode" name="ministerial_code" placeholder="أدخل الكود الوزاري فوراً" dir="ltr"></div>
+    <div class="field full"><label>الطلب السريري *</label><textarea name="clinical_request" required placeholder="اكتب المطلوب الطبي بوضوح"></textarea></div>
+    <div class="field full"><label>ملاحظات / مستندات</label><textarea name="notes"></textarea></div>
+    <div class="full"><button class="primary" type="submit" style="width:100%">حفظ الإحالة وإرسالها للمنسق</button></div></form></div></div>`;
+  setTimeout(()=>document.querySelector('#outgoingForm input')?.focus({preventScroll:true}),0);
+}
+function submitOutgoing(e) {
+  e.preventDefault(); const d=Object.fromEntries(new FormData(e.target));
+  if (!d.patient_name?.trim()||!d.mrn?.trim()||!d.age||!d.specialty||!d.case_type||!d.clinical_request?.trim()) return toast('أكمل الحقول الإلزامية','err');
+  if (d.case_type==='إنقاذ حياة' && !d.ministerial_code?.trim()) return toast('الكود الوزاري إلزامي فوراً لحالات إنقاذ الحياة','err');
+  const id='OUT-'+new Date().getFullYear()+'-'+uid(), now=nowIso();
+  const r={id, ...d, age:Number(d.age), created_by:CURRENT_USER.id, created_by_name:CURRENT_USER.full_name, status:'pending_coordinator', priority:d.case_type==='إنقاذ حياة'?'قصوى':d.case_type==='طارئة'?'عالية':'عادية', created_at:now, updated_at:now, timeline:[{ts:now,from:'new',to:'pending_coordinator',user:CURRENT_USER.full_name,role:CURRENT_USER.role,action:'إنشاء إحالة صادرة',details:{type:d.case_type,specialty:d.specialty}}], attachment_ids:[]};
+  DATA.outgoing_referrals.unshift(r); DATA.meta.seq++; notifyRole('coordinator',id,`📤 إحالة صادرة جديدة: ${d.patient_name}${d.case_type==='إنقاذ حياة'?' 🚨 إنقاذ حياة':''}`,CURRENT_USER.full_name); saveData(); audit('outgoing_created','outgoing_referral',id,r.ref_no||d.mrn); closeModal(); toast('✓ تم إرسال الإحالة الصادرة للمنسق','ok'); showPage('outgoing_referrals');
+}
+function issueOutgoing(id) {
+  const r=DATA.outgoing_referrals.find(x=>x.id===id); if(!r) return;
+  if (!['coordinator','admin'].includes(CURRENT_USER.role)) return toast('الإصدار متاح للمنسق أو المدير الطبي','err');
+  $('modalRoot').innerHTML=`<div class="modal-back"><div class="modal" style="max-width:520px"><div class="mh"><h3>إصدار رسمي — ${esc(r.patient_name)}</h3><button class="ghost sm" onclick="closeModal()">✕</button></div><form onsubmit="saveOutgoingIssue(event,'${esc(id)}')"><div class="field"><label>رقم الإحالة الوزاري *</label><input name="ministerial_ref_no" required dir="ltr" value="${esc(r.ministerial_ref_no||'')}"></div><div class="field"><label>خطاب القبول (PDF أو صورة)</label><input name="acceptance_letter" type="file" accept="image/*,application/pdf"></div><div class="field"><label>ملاحظة الإصدار</label><textarea name="notes">${esc(r.issue_notes||'')}</textarea></div><button class="primary" type="submit" style="width:100%">حفظ الإصدار والأرشفة</button></form></div></div>`;
+}
+async function saveOutgoingIssue(e,id) {
+  e.preventDefault(); const r=DATA.outgoing_referrals.find(x=>x.id===id); if(!r)return;
+  const d=Object.fromEntries(new FormData(e.target)); if(!d.ministerial_ref_no?.trim()) return toast('رقم الإحالة الوزاري إلزامي','err');
+  const duplicate=DATA.outgoing_referrals.some(x=>x.id!==id && x.ministerial_ref_no===d.ministerial_ref_no.trim()); if(duplicate)return toast('رقم الإحالة الوزاري مستخدم مسبقاً','err');
+  const now=nowIso(); r.ministerial_ref_no=d.ministerial_ref_no.trim(); r.issue_notes=d.notes||''; r.status='issued'; r.issued_at=now; r.issued_by=CURRENT_USER.id; r.updated_at=now;
+  const file=e.target.querySelector('[name=acceptance_letter]')?.files?.[0];
+  if(file){ const supported=['image/jpeg','image/png','image/webp','application/pdf'].includes(file.type); if(!supported)return toast('خطاب القبول يجب أن يكون PDF أو صورة','err'); if(file.size>ATTACHMENT_MAX_BYTES)return toast('خطاب القبول أكبر من 4 م.ب','err'); const aid='ATT-OUT-'+uid(); try { await attsPut(aid,file,{referral_id:r.id,category:'acceptance_letter'}); DATA.attachments[aid]={id:aid,referral_id:r.id,name:file.name,type:file.type,mime_type:file.type,size:file.size,category:'acceptance_letter',uploaded_by:CURRENT_USER.id,uploaded_at:now}; r.acceptance_letter_attachment_id=aid; } catch(err){ return toast('تعذر رفع خطاب القبول: '+err.message,'err'); } }
+  r.timeline.push({ts:now,from:'pending_coordinator',to:'issued',user:CURRENT_USER.full_name,role:CURRENT_USER.role,action:'إصدار رسمي وأرشفة في الصادر',details:{ministerial_ref_no:r.ministerial_ref_no,acceptance_letter:r.acceptance_letter_attachment_id?'مرفق':''}});
+  notifyUser(r.created_by,r.id,`✓ تم إصدار إحالتك الصادرة رسمياً برقم ${r.ministerial_ref_no}${r.acceptance_letter_attachment_id?' مع خطاب قبول':''}`); saveData(); audit('outgoing_issued','outgoing_referral',id,r.ministerial_ref_no); closeModal(); toast('✓ تم الإصدار والأرشفة والتنبيه للطبيب','ok'); renderOutgoingReferrals();
+}
+function outgoingFollowUp(id) { const r=DATA.outgoing_referrals.find(x=>x.id===id); if(!r) return; $('modalRoot').innerHTML=`<div class="modal-back"><div class="modal" style="max-width:520px"><div class="mh"><h3>تذكير / استفسار</h3><button class="ghost sm" onclick="closeModal()">✕</button></div><form onsubmit="saveOutgoingFollowUp(event,'${esc(id)}')"><div class="field"><label>نص الاستفسار *</label><textarea name="message" required placeholder="اكتب تذكيراً أو استفساراً للمنسق"></textarea></div><button class="primary" type="submit" style="width:100%">إرسال التذكير</button></form></div></div>`; }
+function saveOutgoingFollowUp(e,id) { e.preventDefault(); const d=Object.fromEntries(new FormData(e.target)); const r=DATA.outgoing_referrals.find(x=>x.id===id); const now=nowIso(); const from=r.status; r.status='follow_up'; r.updated_at=now; r.follow_up_message=d.message.trim(); r.timeline.push({ts:now,from,to:'follow_up',user:CURRENT_USER.full_name,role:CURRENT_USER.role,action:'إرسال تذكير / استفسار',details:{message:r.follow_up_message}}); notifyRole('coordinator',id,`🔔 الطبيب أرسل تذكيراً عن ${r.patient_name}`,CURRENT_USER.full_name); saveData(); closeModal(); toast('✓ تم إرسال التذكير','ok'); renderOutgoingReferrals(); }
+let OUTGOING_QUERY = '';
+let OUTGOING_STATUS = '';
+let OUTGOING_TYPE = '';
+let OUTGOING_SPECIALTY = '';
+let OUTGOING_PAGE = 1;
+let OUTGOING_PAGE_SIZE = 10;
+function outgoingPage(page) { OUTGOING_PAGE = Math.max(1, Number(page) || 1); renderOutgoingReferrals(); }
+function outgoingPageSize(size) { OUTGOING_PAGE_SIZE = Math.min(100, Math.max(1, Number(size) || 10)); OUTGOING_PAGE = 1; renderOutgoingReferrals(); }
+function outgoingFilter(kind, value) { if(kind==='query') OUTGOING_QUERY=String(value||''); if(kind==='status') OUTGOING_STATUS=value; if(kind==='type') OUTGOING_TYPE=value; if(kind==='specialty') OUTGOING_SPECIALTY=value; OUTGOING_PAGE=1; renderOutgoingReferrals(); }
+function outgoingSpecialtyMatches(r, value) { if(!value)return true; const text=String(r.specialty||'').toLowerCase(); const selected=String(value).toLowerCase(); return text===selected || text.includes(selected.split(' / ')[0]) || text.includes(selected.split(' / ')[1]||''); }
+function renderOutgoingReferrals() {
+  const all=DATA.outgoing_referrals.slice().sort((a,b)=>new Date(b.updated_at)-new Date(a.updated_at));
+  let list= CURRENT_USER.role==='doctor' ? all.filter(r=>r.created_by===CURRENT_USER.id) : all;
+  const q=OUTGOING_QUERY.trim().toLowerCase();
+  if(q) list=list.filter(r=>[r.patient_name,r.mrn,r.ministerial_ref_no,r.id].filter(Boolean).join(' ').toLowerCase().includes(q));
+  if(OUTGOING_STATUS) list=list.filter(r=>r.status===OUTGOING_STATUS);
+  if(OUTGOING_TYPE) list=list.filter(r=>r.case_type===OUTGOING_TYPE);
+  if(OUTGOING_SPECIALTY) list=list.filter(r=>outgoingSpecialtyMatches(r,OUTGOING_SPECIALTY));
+  const total=list.length, pages=Math.max(1,Math.ceil(total/OUTGOING_PAGE_SIZE)); OUTGOING_PAGE=Math.min(OUTGOING_PAGE,pages);
+  const visible=list.slice((OUTGOING_PAGE-1)*OUTGOING_PAGE_SIZE,OUTGOING_PAGE*OUTGOING_PAGE_SIZE);
+  const pageNumbers=Array.from(new Set([1,pages,...Array.from({length:5},(_,i)=>OUTGOING_PAGE+i-2).filter(n=>n>=1&&n<=pages)])).sort((a,b)=>a-b);
+  const pageButtons=pageNumbers.map((n,i)=>`${i&&n-pageNumbers[i-1]>1?'<span>…</span>':''}<button class="${n===OUTGOING_PAGE?'primary':'ghost'} sm" onclick="outgoingPage(${n})" ${n===OUTGOING_PAGE?'aria-current="page"':''}>${n}</button>`).join('');
+  const counts=OUTGOING_TYPES.map(t=>[t,all.filter(r=>r.case_type===t).length]);
+  const rows=visible.map(r=>{const st=OUTGOING_STATES[r.status]||{label:r.status,cls:''}, sla=outgoingSla(r), life=r.case_type==='إنقاذ حياة'; return `<tr class="${life?'outgoing-life':''}"><td><b>${esc(r.id)}</b><div class="muted">${esc(r.patient_name)} — MRN ${esc(r.mrn)}</div></td><td>${esc(r.specialty)}</td><td><span class="pill ${life?'p-r':''}">${life?'🚨 ':''}${esc(r.case_type)}</span></td><td><span class="pill ${st.cls}">${esc(st.label)}</span>${sla.overdue?'<div class="overdue">⏱ متأخرة</div>':''}</td><td>${esc(r.ministerial_ref_no||'—')}</td><td><button class="secondary sm" onclick="openOutgoingDetail('${esc(r.id)}')">عرض</button>${['coordinator','admin'].includes(CURRENT_USER.role)&&['pending_coordinator','follow_up'].includes(r.status)?` <button class="success sm" onclick="issueOutgoing('${esc(r.id)}')">إصدار</button>`:''}${CURRENT_USER.role==='doctor'&&r.status==='issued'?` <button class="ghost sm" onclick="outgoingFollowUp('${esc(r.id)}')">تذكير</button>`:''}</td></tr>`}).join('');
+  $('content').innerHTML=`<div class="outgoing-hero"><div><h3>📤 أرشيف الصادر</h3><p>دورة الإحالة الصادرة فقط — بدون الأسرّة</p></div>${['doctor','coordinator','admin'].includes(CURRENT_USER.role)?'<button class="primary" onclick="openCreateOutgoingModal()">＋ إحالة صادرة جديدة</button>':''}</div><div class="stats">${counts.map(([t,n])=>`<div class="stat"><label>${t}</label><strong>${n}</strong></div>`).join('')}</div><div class="panel"><h3>الحالات المرسلة (${total})</h3><div class="grid2 outgoing-filters"><input class="searchbox" placeholder="بحث بالاسم أو رقم الملف أو الرقم الوزاري" value="${esc(OUTGOING_QUERY)}" oninput="outgoingFilter('query',this.value)"><select onchange="outgoingFilter('specialty',this.value)"><option value="">كل التخصصات</option>${SPECIALTY_OPTIONS.map(x=>`<option value="${esc(x.label)}" ${OUTGOING_SPECIALTY===x.label?'selected':''}>${esc(x.label)}</option>`).join('')}</select><select onchange="outgoingFilter('type',this.value)"><option value="">كل أنواع الحالات</option>${OUTGOING_TYPES.map(x=>`<option value="${x}" ${OUTGOING_TYPE===x?'selected':''}>${x}</option>`).join('')}</select><select onchange="outgoingFilter('status',this.value)"><option value="">كل حالات الإجراء</option>${Object.entries(OUTGOING_STATES).map(([k,v])=>`<option value="${k}" ${OUTGOING_STATUS===k?'selected':''}>${v.label}</option>`).join('')}</select><label style="display:flex;align-items:center;gap:8px;color:var(--muted);font-size:12px">عرض <select onchange="outgoingPageSize(this.value)">${[10,25,50,100].map(n=>`<option value="${n}" ${OUTGOING_PAGE_SIZE===n?'selected':''}>${n} صف</option>`).join('')}</select></label></div>${visible.length?`<div class="twrap"><table class="t"><thead><tr><th>المريض / الرقم</th><th>التخصص</th><th>النوع</th><th>الحالة و SLA</th><th>الرقم الوزاري</th><th></th></tr></thead><tbody>${rows}</tbody></table></div>`:'<div class="empty">لا توجد إحالات صادرة مطابقة</div>'}<nav aria-label="صفحات الصادر" style="display:flex;gap:6px;align-items:center;justify-content:center;margin-top:16px;flex-wrap:wrap"><button class="secondary sm" onclick="outgoingPage(${Math.max(1,OUTGOING_PAGE-1)})" ${OUTGOING_PAGE<=1?'disabled':''}>السابق</button>${pageButtons}<button class="secondary sm" onclick="outgoingPage(${Math.min(pages,OUTGOING_PAGE+1)})" ${OUTGOING_PAGE>=pages?'disabled':''}>التالي</button><span style="font-size:12px;color:var(--muted)">صفحة ${OUTGOING_PAGE} من ${pages} — إجمالي ${total} سجل</span></nav></div>`;
+}
+
+function openOutgoingDetail(id) { const r=DATA.outgoing_referrals.find(x=>x.id===id); if(!r)return; const st=OUTGOING_STATES[r.status]||{}; const sla=outgoingSla(r); lockModalBody(); $('modalRoot').innerHTML=`<div class="modal-back" onclick="if(event.target===this)closeModal()"><div class="modal"><div class="mh"><h3>${r.case_type==='إنقاذ حياة'?'🚨 ':''}${esc(r.patient_name)} — ${esc(r.id)}</h3><button class="ghost sm" onclick="closeModal()">✕</button></div><div class="dgrid"><div class="d"><small>رقم الملف</small><strong>${esc(r.mrn)}</strong></div><div class="d"><small>العمر</small><strong>${esc(r.age)}</strong></div><div class="d"><small>التخصص</small><strong>${esc(r.specialty)}</strong></div><div class="d"><small>النوع</small><strong>${esc(r.case_type)}</strong></div><div class="d"><small>الحالة</small><strong>${esc(st.label)}</strong></div><div class="d"><small>SLA / Aging</small><strong class="${sla.overdue?'overdue':''}">${Math.floor(sla.hours)} ساعة / حد ${sla.limit}</strong></div></div>${r.ministerial_code?`<div class="notice danger">الكود الوزاري: <b>${esc(r.ministerial_code)}</b></div>`:''}${r.ministerial_ref_no?`<div class="notice success">رقم الإحالة الوزاري: <b>${esc(r.ministerial_ref_no)}</b></div>`:''}<div class="panel" style="box-shadow:none"><h3>الطلب السريري</h3><p>${esc(r.clinical_request)}</p></div><div class="panel" style="box-shadow:none"><h3>السجل الزمني (${r.timeline.length})</h3><div class="timeline">${r.timeline.slice().reverse().map(t=>`<div class="tl-item"><div class="tl-header"><b>${esc(t.action)}</b><span class="tl-time">${fmtDate(t.ts)}</span></div><div class="tl-user">${esc(t.user)} — ${roleLabel(t.role)}</div>${t.details?.message?`<div class="tl-detail">${esc(t.details.message)}</div>`:''}</div>`).join('')}</div></div></div></div>`; }
 
 // ═══════════════════════════════════════════════════════════════════
 // لوحة التحكم
@@ -1943,10 +2055,14 @@ function renderDashboard() {
     { label: 'مكتملة', val: byStatus.completed, filter: 'reports' }
   ];
 
+  const outgoing = DATA.outgoing_referrals || [];
+  const outgoingByType = Object.fromEntries(OUTGOING_TYPES.map(t => [t, outgoing.filter(r => r.case_type === t).length]));
+  const outgoingOverdue = outgoing.filter(r => outgoingSla(r).overdue).length;
+  const outgoingPanel = `<div class="panel outgoing-dashboard"><div class="ph"><div><h3>📤 المدير الطبي — الصادر</h3><p>إحصائيات دورة الإحالة الصادرة وSLA/Aging</p></div><button class="secondary sm" onclick="showPage('outgoing_referrals')">فتح الأرشيف</button></div><div class="stats">${OUTGOING_TYPES.map(t=>`<div class="stat"><label>${t}</label><strong>${outgoingByType[t]}</strong></div>`).join('')}<div class="stat"><label>حالات متأخرة</label><strong class="${outgoingOverdue?'overdue':''}">${outgoingOverdue}</strong></div></div></div>`;
   const recent = all.slice().sort((a, b) => new Date(b.updated_at || b.created_at) - new Date(a.updated_at || a.created_at)).slice(0, 8);
   const typeEntries = REFERRAL_TYPES.map(t => ({ type: t, count: byType[t] || 0, meta: REFERRAL_TYPE_META[t] }));
 
-  $('content').innerHTML = shiftBanner + `
+  $('content').innerHTML = shiftBanner + outgoingPanel + `
     <div class="stats">${cards.map(c => `<div class="stat" onclick="showPage('${c.filter}')"><label>${c.label}</label><strong>${c.val}</strong></div>`).join('')}</div>
     <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px">
       <div class="panel"><h3>حسب نوع الإحالة</h3><div style="display:flex;flex-direction:column;gap:8px">

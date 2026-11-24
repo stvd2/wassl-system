@@ -21,7 +21,7 @@ users = [
 refs = [{'id': f'ref-{i}', 'ref_no': f'R-{i}', 'patient_name': f'مريض تجريبي {i}', 'mrn': str(i), 'priority': 'تنويم عادي', 'specialty': 'الباطنة', 'target_specialty': 'الباطنة', 'status': 'awaiting_doctor', 'created_at': now, 'updated_at': now, 'diagnosis': 'اختبار', 'timeline': [], 'attachment_ids': []} for i in range(25)]
 defaults = [('جميع المنسقين','coordinator'),('جميع الأطباء','doctor'),('إدارة الأسرة','beds'),('المديرون','admin'),('الجميع','all')]
 chats = [{'id': 'chat-1', 'type': 'direct', 'members': ['admin-id', 'doctor-id'], 'created_at': now, 'reads': {}, 'messages': []}] + [{'id': f'group-{c}', 'type': 'group', 'name': n, 'category': c, 'members': 'auto', 'created_at': now, 'reads': {}, 'messages': []} for n, c in defaults]
-state = {'meta': {'version':'v6', 'sync_revision':1, 'seed_done':True, 'seq':25, 'auditSeq':0, 'notifSeq':0, 'local_updated_at':now}, 'users':users, 'referrals':refs, 'beds':[], 'audit':[], 'notifications':[], 'attachments':{}, 'chats':chats, 'shifts':[]}
+state = {'meta': {'version':'v6', 'sync_revision':1, 'seed_done':True, 'seq':25, 'auditSeq':0, 'notifSeq':0, 'local_updated_at':now}, 'users':users, 'referrals':refs, 'beds':[], 'audit':[], 'notifications':[], 'attachments':{}, 'outgoing_referrals':[], 'chats':chats, 'shifts':[]}
 attachments = {}
 fail_put = False
 fail_attachment = False
@@ -141,6 +141,49 @@ def main():
                 page.evaluate('showPage("create")')
                 assert page.locator('#modalRoot .modal').count() == 1, f'create modal for {role}'
                 page.evaluate('closeModal()')
+            # Phase 1 outgoing referral flow: doctor -> coordinator issue -> notification/follow-up.
+            page.evaluate("CURRENT_USER=structuredClone(DATA.users.find(u=>u.role==='doctor')); PAGE='outgoing_referrals'; buildNav(); showPage('outgoing_referrals')")
+            page.locator('button').filter(has_text='إحالة صادرة جديدة').click()
+            page.locator('#outgoingForm [name=patient_name]').fill('مريض صادر محلي')
+            page.locator('#outgoingForm [name=mrn]').fill('OUT-MRN-1')
+            page.locator('#outgoingForm [name=age]').fill('42')
+            page.locator('#outgoingForm [name=specialty]').select_option(label='أمراض القلب / Cardiology')
+            page.locator('#outgoingForm [name=case_type]').select_option('إنقاذ حياة')
+            assert page.locator('#ministerialCode').is_visible(), 'life code appears immediately'
+            page.locator('#outgoingForm [name=ministerial_code]').fill('LIFE-001')
+            page.locator('#outgoingForm [name=clinical_request]').fill('تقييم عاجل وتحويل فوري')
+            page.locator('#outgoingForm button[type=submit]').click()
+            page.wait_for_function("DATA.outgoing_referrals.length === 1 && DATA.outgoing_referrals[0].case_type === 'إنقاذ حياة'")
+            assert page.evaluate("DATA.outgoing_referrals[0].priority") == 'قصوى'
+            outgoing_id = page.evaluate('DATA.outgoing_referrals[0].id')
+            page.evaluate("CURRENT_USER=structuredClone(DATA.users.find(u=>u.role==='coordinator')); PAGE='outgoing_referrals'; buildNav(); showPage('outgoing_referrals')")
+            page.wait_for_selector('button:has-text("إصدار")', timeout=10000)
+            page.locator('button').filter(has_text='إصدار').click()
+            page.locator('[name=ministerial_ref_no]').fill('MIN-2027-001')
+            page.locator('[name=acceptance_letter]').set_input_files({'name':'acceptance.pdf','mimeType':'application/pdf','buffer':b'acceptance'})
+            page.locator('#modalRoot button[type=submit]').click()
+            page.wait_for_function("DATA.outgoing_referrals[0].status === 'issued' && DATA.outgoing_referrals[0].ministerial_ref_no === 'MIN-2027-001' && !!DATA.outgoing_referrals[0].acceptance_letter_attachment_id", timeout=15000)
+            assert page.evaluate("DATA.outgoing_referrals[0].acceptance_letter_attachment_id")
+            assert page.evaluate("DATA.outgoing_referrals[0].timeline.some(x=>x.action.includes('إصدار رسمي'))")
+            page.evaluate("CURRENT_USER=structuredClone(DATA.users.find(u=>u.role==='doctor')); PAGE='outgoing_referrals'; buildNav(); showPage('outgoing_referrals')")
+            assert page.locator('button').filter(has_text='تذكير').count() == 1, 'doctor follow-up button'
+            page.locator('button').filter(has_text='تذكير').click()
+            page.locator('[name=message]').fill('يرجى تحديث حالة القبول')
+            page.locator('#modalRoot button[type=submit]').click()
+            page.wait_for_function("DATA.outgoing_referrals[0].status === 'follow_up'")
+            page.evaluate("CURRENT_USER=structuredClone(DATA.users.find(u=>u.role==='admin')); PAGE='dashboard'; buildNav(); showPage('dashboard')")
+            assert 'المدير الطبي — الصادر' in page.locator('#content').inner_text(), 'medical dashboard outgoing panel'
+            page.evaluate("""() => {
+              for (let i = 2; i <= 25; i++) DATA.outgoing_referrals.push({id:'OUT-'+i, patient_name:'مريض '+i, mrn:'MRN-'+i, specialty:i%2?'الباطنة / Internal Medicine':'أمراض القلب / Cardiology', case_type:i%3?'عادية':'طارئة', status:i%4?'issued':'follow_up', ministerial_ref_no:'MIN-'+i, created_by:'doctor-id', created_at:'2027-01-01T00:00:00Z', updated_at:'2027-01-01T00:00:00Z', timeline:[], attachment_ids:[]});
+              PAGE='outgoing_referrals'; buildNav(); showPage('outgoing_referrals');
+            }""")
+            assert page.locator('nav[aria-label="صفحات الصادر"]').count() == 1, 'outgoing pagination'
+            assert page.locator('nav[aria-label="صفحات الصادر"] span').filter(has_text='إجمالي 25 سجل').count() == 1, 'outgoing total count'
+            page.locator('.outgoing-filters select').nth(1).select_option('طارئة')
+            assert page.locator('table.t tbody tr').count() > 0, 'outgoing type filter'
+            page.locator('.outgoing-filters select').nth(1).select_option('')
+            page.locator('.outgoing-filters input').fill('MRN-25')
+            assert page.locator('table.t tbody tr').count() == 1, 'outgoing search filter'
             page.evaluate('''() => {
               CURRENT_USER = structuredClone(DATA.users.find(u => u.role === 'admin'));
               PAGE = 'outgoing'; buildNav(); showPage('outgoing');

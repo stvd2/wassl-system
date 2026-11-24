@@ -59,6 +59,27 @@ const PRIVATE_USER_FIELDS = new Set([
   'password', 'password_hash', 'hash', 'salt', 'password_history',
   'failed_attempts', 'locked_until', 'temporary_password', 'plain_' + 'password'
 ]);
+const { validateOutgoingState } = require('./outgoing-validation');
+function validateOutgoingPermissions(current, next, auth) {
+  const before = new Map((current?.outgoing_referrals || []).map(item => [String(item.id), item]));
+  const after = new Map((next?.outgoing_referrals || []).map(item => [String(item.id), item]));
+  const actorId = String(auth?.profile?.id || auth?.authUser?.id || '');
+  const actorRole = String(auth?.profile?.role || '');
+  for (const [id, oldItem] of before) {
+    if (!after.has(id)) throw stateError('لا يُسمح بحذف سجل من أرشيف الصادر');
+    const item = after.get(id);
+    if (String(item.ministerial_ref_no || '').trim() !== String(oldItem.ministerial_ref_no || '').trim() && !['coordinator', 'admin'].includes(actorRole)) throw stateError('إصدار الرقم الوزاري متاح للمنسق أو المدير فقط', 403);
+    if (item.acceptance_letter_attachment_id !== oldItem.acceptance_letter_attachment_id && !['coordinator', 'admin'].includes(actorRole)) throw stateError('رفع خطاب القبول متاح للمنسق أو المدير فقط', 403);
+  }
+  for (const [id, item] of after) {
+    if (!before.has(id) && actorRole === 'doctor' && String(item.created_by || '') !== actorId) throw stateError('لا يمكن للطبيب إنشاء صادر باسم مستخدم آخر', 403);
+    if (item.acceptance_letter_attachment_id) {
+      const meta = next.attachments?.[item.acceptance_letter_attachment_id];
+      if (String(meta?.uploaded_by || '') !== actorId && actorRole !== 'admin') throw stateError('رافع خطاب القبول لا يطابق المستخدم الحالي', 403);
+    }
+  }
+}
+
 function sanitizeState(value) {
   if (!value || typeof value !== 'object') return value;
   const out = { ...value };
@@ -139,6 +160,12 @@ module.exports = async function handler(req, res) {
       }
       const payload = sanitizeState(req.body);
       if (!payload || typeof payload !== 'object' || Array.isArray(payload)) return sendJson(req, res, 400, { error: 'body غير صالح' });
+      try { validateOutgoingState(payload); } catch (error) { return sendJson(req, res, error.statusCode || 400, { error: error.message }); }
+      if (Array.isArray(payload.outgoing_referrals)) {
+        const { data: currentRow, error: currentError } = await supabase.from('app_state').select('data').eq('id', STATE_ID).maybeSingle();
+        if (currentError) throw currentError;
+        try { validateOutgoingPermissions(currentRow?.data, payload, auth); } catch (error) { return sendJson(req, res, error.statusCode || 400, { error: error.message }); }
+      }
       const { data: result, error } = await supabase.rpc('save_app_state', {
         expected_revision: expectedRevision(payload),
         next_data: payload
