@@ -47,8 +47,12 @@ module.exports = async function handler(req, res) {
     if (password.toLowerCase().includes(String(request.employee_number).toLowerCase())) return json(res, 400, { error: 'لا تستخدم رقم الموظف داخل كلمة المرور المؤقتة', request_id: requestId });
 
     let authUser = await existingAuthUser(email);
-    if (existingProfileUserId && authUser && existingProfileUserId !== authUser.id) return json(res, 409, { error: 'رقم الموظف مرتبط بحساب آخر', request_id: requestId });
     if (authUser) {
+      // Never reset or mutate a pre-existing Auth account during approval.
+      // Reconcile legacy/orphaned accounts explicitly instead of guessing ownership.
+      return json(res, 409, { error: existingProfileUserId === authUser.id ? 'يوجد حساب مرتبط مسبقاً؛ راجع الحساب بدلاً من إعادة تعيين كلمة مروره عبر طلب التسجيل' : 'يوجد حساب Auth بهذا المعرّف دون ربط موثوق؛ يلزم التحقق اليدوي قبل الاعتماد', request_id: requestId });
+    }
+    if (false) {
       const updated = await admin.auth.admin.updateUserById(authUser.id, { password, email_confirm: true, user_metadata: { employee_number: request.employee_number, full_name: request.full_name, mobile: request.mobile } });
       if (updated.error) throw updated.error;
       authUser = updated.data.user;
@@ -58,7 +62,6 @@ module.exports = async function handler(req, res) {
       authUser = created.data.user;
     }
 
-    if (conflict.data && conflict.data.auth_user_id !== authUser.id) return json(res, 409, { error: 'رقم الموظف مرتبط بحساب آخر', request_id: requestId });
     const profileWrite = await admin.from('user_profiles').upsert({ auth_user_id: authUser.id, employee_number: request.employee_number, email, full_name: request.full_name, mobile: request.mobile, role, department, active: true, must_change_password: true, password_changed_at: null }, { onConflict: 'auth_user_id' });
     if (profileWrite.error) throw profileWrite.error;
     const profile = await admin.from('user_profiles').select('auth_user_id, employee_number, full_name, mobile, role, department, active, must_change_password, created_at, updated_at').eq('auth_user_id', authUser.id).maybeSingle();
