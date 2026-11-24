@@ -288,6 +288,34 @@ input[dir="ltr"],select[dir="ltr"],textarea[dir="ltr"],.ltr{direction:ltr;text-a
   .msg{max-width:88%;font-size:13px}
 }
 
+
+/* WASL institutional horizontal redesign */
+:root{--navy:#123b35;--teal:#087f73;--bg:#f3f7f6;--card:#fff;--text:#203a36;--muted:#6c817c;--line:#dce8e4;--shadow:0 10px 30px rgba(18,59,53,.08)}
+body{background:var(--bg);color:var(--text)}
+.top{min-height:76px;padding:8px clamp(16px,3vw,42px);background:linear-gradient(105deg,#103d36 0%,#15594d 65%,#087f73 100%);color:#fff;border:0;box-shadow:0 5px 20px rgba(12,48,42,.16)}
+.top .tl strong,.top .tl small,.top .ur #userName,.top .ur #userRole{color:#fff!important}
+.top .mini{background:rgba(255,255,255,.16);border:1px solid rgba(255,255,255,.25)}
+.top .ur .ghost,.top .notif-btn{background:rgba(255,255,255,.13);color:#fff}
+.horizontal-nav{position:sticky;top:76px;z-index:9;background:#fff;border-bottom:1px solid var(--line);box-shadow:0 4px 16px rgba(18,59,53,.05);padding:8px clamp(12px,2.5vw,36px)}
+#navArea{display:flex;align-items:center;justify-content:center;gap:6px;flex-wrap:wrap;max-width:1680px;margin:auto}
+#navArea .nav{width:auto;white-space:nowrap;margin:0;padding:10px 15px;border:1px solid transparent;border-radius:10px;color:#42615a;justify-content:center;font-size:13px}
+#navArea .nav:hover,#navArea .nav.active{background:#eaf5f1;color:#087f73;border-color:#cce5dc}
+#navArea .nav .count{margin-right:5px}
+.layout{display:block;min-height:calc(100vh - 130px)}.layout>aside{display:none}
+main{width:100%;max-width:1800px;margin:0 auto;padding:clamp(18px,2.4vw,36px)}
+.ph{align-items:center;margin-bottom:22px}.ph h2{font-size:clamp(22px,2vw,29px)}
+.stats{grid-template-columns:repeat(auto-fit,minmax(205px,1fr));gap:16px}
+.stat,.panel{border-color:var(--line);border-radius:16px}.stat{padding:20px}.stat strong{font-size:30px}.panel{padding:22px}
+table.t th{background:#f2f7f5;color:#527068}table.t tr:hover td{background:#f7fbf9}
+.primary{background:var(--teal)}.primary:hover{background:#06685f}.secondary{background:#e7f3ef;color:#087f73}
+.lw{min-height:100vh;display:grid;grid-template-columns:minmax(0,1.1fr) minmax(380px,.82fr);align-items:center;justify-content:center;gap:clamp(28px,6vw,100px);padding:clamp(24px,5vw,76px);background:radial-gradient(circle at 12% 15%,rgba(183,163,106,.16),transparent 27%),linear-gradient(125deg,#0c342f 0%,#12483f 55%,#087f73 100%);position:relative;isolation:isolate;overflow:hidden}
+.lw:before{content:"وَصْل  |  WASSL\A\Aمنصة التنسيق والإحالات الصحية\A\Aتواصل أوضح، إحالات أسرع، ورعاية مترابطة بين المنشآت الصحية.\A\Aضمن منظومة التجمع الصحي";white-space:pre-line;display:flex;flex-direction:column;justify-content:center;color:#fff;font-size:clamp(23px,3vw,42px);font-weight:800;line-height:1.8;padding:clamp(20px,4vw,60px);border:1px solid rgba(255,255,255,.17);border-radius:28px;background:linear-gradient(145deg,rgba(255,255,255,.10),rgba(255,255,255,.025));box-shadow:inset 0 1px rgba(255,255,255,.14),0 25px 70px rgba(0,0,0,.12);min-height:min(68vh,650px)}
+.lw .login{width:100%;max-width:540px;justify-self:center;padding:clamp(24px,3vw,42px);border-radius:24px;box-shadow:0 28px 80px rgba(0,0,0,.25);border:1px solid rgba(255,255,255,.65)}
+.login .brand{margin-bottom:24px}.login .logo{background:linear-gradient(145deg,#0b9b91,#123b35);box-shadow:0 7px 18px rgba(8,127,115,.22)}.login .primary{border-radius:12px}.login input{min-height:48px}.login-logos{justify-content:center;gap:26px}.login-logos img{max-height:48px}
+.mobile-bottom-nav{background:rgba(255,255,255,.98);border-top-color:var(--line)}
+@media(max-width:900px){.lw{grid-template-columns:1fr;padding:20px;gap:16px}.lw:before{min-height:0;padding:18px 20px;font-size:20px;line-height:1.55;border-radius:18px}.lw .login{max-width:560px}.horizontal-nav{display:none}.layout{min-height:calc(100vh - 66px)}main{padding:18px 14px 88px}.top{top:0;min-height:66px;padding:8px 12px}}
+@media(max-width:600px){.lw:before{font-size:17px;padding:14px}.lw .login{padding:22px 18px}.stats{grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}.stat{padding:14px}.stat strong{font-size:24px}}
+
 </style>
 </head>
 <body>
@@ -335,8 +363,10 @@ input[dir="ltr"],select[dir="ltr"],textarea[dir="ltr"],.ltr{direction:ltr;text-a
     </div>
   </header>
   <div id="syncWarning" role="status" class="hidden" style="padding:10px 18px;background:#fff2d9;color:#8a3610;font-weight:700;border-bottom:1px solid #eab77c"></div>
+  <nav class="horizontal-nav" aria-label="التنقل الرئيسي">
+    <div id="navArea"></div>
+  </nav>
   <div class="layout">
-    <aside><div id="navArea"></div></aside>
     <main id="main"></main>
   </div>
   <nav class="mobile-bottom-nav" id="mobileBottomNav" aria-label="التنقل السريع">
