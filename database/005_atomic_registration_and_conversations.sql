@@ -86,12 +86,19 @@ declare
   v_conversation public.conversations%rowtype;
   v_members jsonb;
   v_ids uuid[];
+  v_active_count integer;
 begin
   if p_creator is null or p_type not in ('direct','group') then
     raise exception 'invalid conversation request' using errcode = '22023';
   end if;
   select array_agg(distinct member_id) into v_ids
   from unnest(coalesce(p_member_ids, array[]::uuid[]) || array[p_creator]) as requested(member_id);
+  select count(*) into v_active_count
+  from public.user_profiles
+  where auth_user_id = any(v_ids) and active is true;
+  if v_active_count <> coalesce(array_length(v_ids,1),0) then
+    raise exception 'one or more conversation members are inactive or unregistered' using errcode = '42501';
+  end if;
   if p_type = 'direct' and coalesce(array_length(v_ids,1),0) <> 2 then
     raise exception 'direct conversation requires two members' using errcode = '22023';
   end if;
