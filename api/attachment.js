@@ -48,6 +48,38 @@ async function readBody(req) {
   for await (const chunk of req) { total += chunk.length; if (total > MAX_BYTES) throw Object.assign(new Error('الملف أكبر من 15 م.ب'), { statusCode: 413 }); chunks.push(chunk); }
   return Buffer.concat(chunks);
 }
+async function readMultipartUpload(req) {
+  const contentType = String(req.headers['content-type'] || '');
+  if (!contentType.toLowerCase().startsWith('multipart/form-data')) return null;
+  const match = contentType.match(/boundary=(?:"([^"]+)"|([^;]+))/i);
+  if (!match) throw Object.assign(new Error('صيغة multipart غير صالحة'), { statusCode: 400 });
+  const boundary = Buffer.from(`--${match[1] || match[2]}`);
+  const raw = await readBody(req);
+  let conversationId = '';
+  let file = null;
+  let cursor = 0;
+  while (cursor < raw.length) {
+    const start = raw.indexOf(boundary, cursor);
+    if (start < 0) break;
+    const partStart = start + boundary.length;
+    if (raw.subarray(partStart, partStart + 2).toString() === '--') break;
+    const headerStart = partStart + (raw.subarray(partStart, partStart + 2).toString() === '\r\n' ? 2 : 0);
+    const headerEnd = raw.indexOf(Buffer.from('\r\n\r\n'), headerStart);
+    if (headerEnd < 0) break;
+    const headers = raw.subarray(headerStart, headerEnd).toString('utf8');
+    const bodyStart = headerEnd + 4;
+    const nextBoundary = raw.indexOf(boundary, bodyStart);
+    if (nextBoundary < 0) break;
+    const bodyEnd = nextBoundary >= 2 && raw.subarray(nextBoundary - 2, nextBoundary).toString() === '\r\n' ? nextBoundary - 2 : nextBoundary;
+    const body = raw.subarray(bodyStart, bodyEnd);
+    const name = headers.match(/name="([^"]+)"/i)?.[1] || '';
+    const partType = headers.match(/\r\ncontent-type:\s*([^\r\n]+)/i)?.[1]?.trim().toLowerCase() || '';
+    if (name === 'conversation_id') conversationId = body.toString('utf8').trim();
+    if (name === 'file') file = { body, contentType: partType || 'application/octet-stream' };
+    cursor = nextBoundary;
+  }
+  return { conversationId, body: file?.body || Buffer.alloc(0), contentType: file?.contentType || 'application/octet-stream' };
+}
 async function attachmentFor(path) {
   const { data, error } = await admin.from('conversation_attachments').select('id, conversation_id, message_id, owner_id, storage_bucket, storage_path, original_name, mime_type, byte_size, created_at').eq('storage_bucket', BUCKET).eq('storage_path', path).maybeSingle();
   if (error) throw error;
@@ -154,10 +186,12 @@ async function handleOutgoing(req, res, auth, context, id) {
 
 module.exports = async function handler(req, res) {
   const id = idFrom(req); if (!id) return send(res, 400, JSON.stringify({ error: 'معرّف المرفق غير صالح' }));
-  const path = id; const conversationId = conversationFrom(req);
+  const path = id;
   try {
     const auth = await requireUser(req, { roles: ['admin', 'coordinator', 'doctor', 'beds'] });
     if (!auth.ok) return send(res, auth.status, JSON.stringify({ error: auth.error }));
+    const multipart = (req.method === 'PUT' || req.method === 'POST') ? await readMultipartUpload(req) : null;
+    const conversationId = uuid(requestValue(req, 'conversation_id') || req.headers['x-conversation-id'] || multipart?.conversationId);
     const outgoing = outgoingContextFrom(req); if (!outgoing) return send(res, 400, JSON.stringify({ error: 'سياق المرفق غير صالح' }));
     if (outgoing.category === 'acceptance_letter') return handleOutgoing(req, res, auth, outgoing, id);
     if (outgoing.category === 'referral_attachment') return handleRegularReferral(req, res, auth, outgoing, id);
@@ -167,9 +201,9 @@ module.exports = async function handler(req, res) {
     let record = await attachmentFor(path);
     if (record && record.conversation_id !== conversationId) return send(res, 403, JSON.stringify({ error: 'المرفق مرتبط بمحادثة أخرى' }));
     if (req.method === 'PUT' || req.method === 'POST') {
-      const contentType = String(req.headers['content-type'] || 'application/octet-stream').split(';')[0].toLowerCase();
+      const contentType = String(multipart?.contentType || req.headers['content-type'] || 'application/octet-stream').split(';')[0].toLowerCase();
       if (!MIME_TYPES.has(contentType)) return send(res, 415, JSON.stringify({ error: 'نوع الملف غير مسموح' }));
-      const body = await readBody(req); if (!body.length || body.length > MAX_BYTES) return send(res, 413, JSON.stringify({ error: 'حجم الملف غير صالح' }));
+      const body = multipart ? multipart.body : await readBody(req); if (!body.length || body.length > MAX_BYTES) return send(res, 413, JSON.stringify({ error: 'حجم الملف غير صالح' }));
       if (record && record.owner_id !== auth.authUser.id && auth.profile.role !== 'admin') return send(res, 403, JSON.stringify({ error: 'لا تملك المرفق' }));
       const { error: uploadError } = await supabase.storage.from(BUCKET).upload(path, body, { contentType, upsert: true, cacheControl: '3600' }); if (uploadError) throw uploadError;
       const values = { conversation_id: conversationId, message_id: messageFrom(req) || null, owner_id: record?.owner_id || auth.authUser.id, storage_bucket: BUCKET, storage_path: path, original_name: originalNameFrom(req, id), mime_type: contentType, byte_size: body.length };

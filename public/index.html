@@ -777,10 +777,13 @@ async function attsPut(id, blob, context = {}) {
   if (blob.size > ATTACHMENT_MAX_BYTES) throw new Error('الحد الحالي للمرفق 4 م.ب؛ الملفات الأكبر تتطلب مسار رفع مباشر وآمن');
   ACTIVE_ATTACHMENT_UPLOADS++;
   try {
+    const uploadBody = context.conversation_id
+      ? (() => { const form = new FormData(); form.append('conversation_id', context.conversation_id); form.append('file', blob, 'attachment'); return form; })()
+      : blob;
     const res = await fetch(attachmentUrl(id, context), {
       method: 'PUT',
-      headers: { 'Content-Type': blob.type || 'application/octet-stream', ...(context.referral_id ? {'X-Referral-Id': context.referral_id} : {}), ...(context.category ? {'X-Attachment-Category': context.category} : {}), ...(context.conversation_id ? {'X-Conversation-Id': context.conversation_id} : {}) },
-      body: blob,
+      headers: { ...(context.conversation_id ? {} : { 'Content-Type': blob.type || 'application/octet-stream' }), ...(context.referral_id ? {'X-Referral-Id': context.referral_id} : {}), ...(context.category ? {'X-Attachment-Category': context.category} : {}), ...(context.conversation_id ? {'X-Conversation-Id': context.conversation_id} : {}) },
+      body: uploadBody,
       cache: 'no-store'
     });
     if (!res.ok) {
