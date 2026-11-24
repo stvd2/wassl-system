@@ -48,19 +48,14 @@ module.exports = async function handler(req, res) {
       if (type === 'group' && memberIds.length < 2) return sendJson(res, 400, { error: 'المجموعة تحتاج عضواً آخر على الأقل' });
       const title = body.title == null ? null : String(body.title).trim().slice(0, 200) || null;
 
-      const { data: conversation, error: conversationError } = await admin
-        .from('conversations')
-        .insert({ conversation_type: type, title, created_by: auth.authUser.id })
-        .select('id, conversation_type, title, created_by, created_at, updated_at')
-        .single();
-      if (conversationError) throw conversationError;
-      const memberRows = memberIds.map(userId => ({ conversation_id: conversation.id, user_id: userId, member_role: userId === auth.authUser.id ? 'owner' : 'member' }));
-      const { error: memberError } = await admin.from('conversation_members').insert(memberRows);
-      if (memberError) {
-        await admin.from('conversations').delete().eq('id', conversation.id);
-        throw memberError;
-      }
-      return sendJson(res, 201, { conversation, members: memberRows });
+      const { data: created, error: createError } = await admin.rpc('wasl_create_conversation', {
+        p_creator: auth.authUser.id,
+        p_type: type,
+        p_title: title,
+        p_member_ids: memberIds
+      });
+      if (createError) throw createError;
+      return sendJson(res, 201, created);
     }
 
     if (req.method === 'PATCH') {
