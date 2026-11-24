@@ -2,6 +2,12 @@
 -- Transactional primitives used only by the trusted server API.
 begin;
 
+-- Approval is claimed with a compare-and-set status transition so concurrent
+-- administrators cannot provision the same request twice.
+alter table public.auth_requests drop constraint if exists auth_requests_status_check;
+alter table public.auth_requests add constraint auth_requests_status_check
+  check (status in ('pending','processing','approved','rejected'));
+
 create table if not exists public.wasl_api_rate_limits (
   key_hash text not null,
   window_start timestamptz not null,
