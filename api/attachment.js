@@ -1,17 +1,12 @@
 'use strict';
 
 const { createClient } = require('@supabase/supabase-js');
-const { promisify } = require('node:util');
-const { pipeline } = require('node:stream');
-const streamPipeline = promisify(pipeline);
 const { requireUser } = require('./_auth');
 const { admin, isMember, sendJson, uuid } = require('./_conversations');
 
 const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE_KEY, { auth: { persistSession: false } });
 const BUCKET = 'attachments';
 const MAX_BYTES = 15 * 1024 * 1024;
-const ACCEPTANCE_MAX_BYTES = 4 * 1024 * 1024;
-const ACCEPTANCE_MIME = new Set(['application/pdf', 'image/jpeg', 'image/png', 'image/webp']);
 const MIME_TYPES = new Set([
   'application/pdf', 'image/jpeg', 'image/png', 'image/webp',
   'application/vnd.ms-excel',
@@ -87,15 +82,9 @@ module.exports = async function handler(req, res) {
     const outgoing = outgoingContextFrom(req);
     if (!outgoing) return send(res, 400, JSON.stringify({ error: 'سياق المرفق غير صالح' }));
     let record = null;
-    if (outgoing.category && outgoing.category !== 'acceptance_letter') return send(res, 400, JSON.stringify({ error: 'تصنيف المرفق غير صالح' }));
-    if (outgoing.category === 'acceptance_letter') {
-      if (!outgoing.referralId || !['coordinator','admin'].includes(auth.profile.role)) return send(res, 403, JSON.stringify({ error: 'رفع خطاب القبول غير مصرح' }));
-      const { data: stateRow, error: stateError } = await admin.from('app_state').select('data').eq('id', 'main').maybeSingle();
-      if (stateError) throw stateError;
-      const outgoingReferral = (stateRow?.data?.outgoing_referrals || []).find(item => String(item.id) === outgoing.referralId);
-      if (!outgoingReferral) return send(res, 404, JSON.stringify({ error: 'الإحالة الصادرة غير موجودة' }));
-    }
-    if (conversationId) {
+    if (outgoing.category) return send(res, 403, JSON.stringify({ error: 'مرفقات الإحالات خارج المحادثات معطّلة مؤقتاً حتى ربط كل ملف بسجل ملكية موثوق' }));
+    if (!conversationId) return send(res, 400, JSON.stringify({ error: 'conversation_id مطلوب للتحقق من عضوية المرفق' }));
+    {
       if (!(await isMember(conversationId, auth.authUser.id))) return send(res, 403, JSON.stringify({ error: 'لا تملك عضوية هذه المحادثة' }));
       record = await attachmentFor(path);
       if (record && record.conversation_id !== conversationId) return send(res, 403, JSON.stringify({ error: 'المرفق مرتبط بمحادثة أخرى' }));
@@ -105,12 +94,11 @@ module.exports = async function handler(req, res) {
       const contentType = String(req.headers['content-type'] || 'application/octet-stream').split(';')[0].toLowerCase();
       if (!MIME_TYPES.has(contentType)) return send(res, 415, JSON.stringify({ error: 'نوع الملف غير مسموح' }));
       const body = await readBody(req);
-      if (outgoing.category === 'acceptance_letter' && (!ACCEPTANCE_MIME.has(contentType) || body.length > ACCEPTANCE_MAX_BYTES)) return send(res, 413, JSON.stringify({ error: 'خطاب القبول يجب أن يكون PDF أو صورة وبحجم لا يتجاوز 4 م.ب' }));
       if (!body.length || body.length > MAX_BYTES) return send(res, 413, JSON.stringify({ error: 'حجم الملف غير صالح' }));
       if (record && record.owner_id !== auth.authUser.id && auth.profile.role !== 'admin') return send(res, 403, JSON.stringify({ error: 'لا تملك المرفق' }));
       const { error: uploadError } = await supabase.storage.from(BUCKET).upload(path, body, { contentType, upsert: true, cacheControl: '3600' });
       if (uploadError) throw uploadError;
-      if (conversationId) {
+      {
         const values = {
           conversation_id: conversationId,
           message_id: messageFrom(req) || null,
@@ -131,11 +119,10 @@ module.exports = async function handler(req, res) {
         }
         return send(res, 200, JSON.stringify({ ok: true, id, attachment: saved }));
       }
-      return send(res, 200, JSON.stringify({ ok: true, id }));
     }
 
     if (req.method === 'GET') {
-      if (conversationId && !record) return send(res, 404, JSON.stringify({ error: 'بيانات المرفق المعزول غير موجودة' }));
+      if (!record || record.conversation_id !== conversationId) return send(res, 404, JSON.stringify({ error: 'بيانات المرفق غير موجودة' }));
       const { data, error } = await supabase.storage.from(BUCKET).download(path);
       if (error || !data) return send(res, 404, JSON.stringify({ error: 'المرفق غير موجود' }));
       const buf = Buffer.from(await data.arrayBuffer());
