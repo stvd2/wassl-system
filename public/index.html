@@ -301,7 +301,11 @@ body{background:var(--bg);color:var(--text)}
 #navArea .nav{width:auto;white-space:nowrap;margin:0;padding:10px 15px;border:1px solid transparent;border-radius:10px;color:#42615a;justify-content:center;font-size:13px}
 #navArea .nav:hover,#navArea .nav.active{background:#eaf5f1;color:#087f73;border-color:#cce5dc}
 #navArea .nav .count{margin-right:5px}
-.layout{display:block;min-height:calc(100vh - 130px)}.layout>aside{display:none}
+/* Desktop uses the horizontal navigation only; keep the mobile bottom navigation intact. */
+.layout{display:block;grid-template-columns:minmax(0,1fr);min-height:calc(100vh - 130px)}
+.layout>aside, .layout>nav[aria-label="التنقل الجانبي"]{display:none!important}
+@media(min-width:901px){.horizontal-nav{display:block}.mobile-bottom-nav{display:none!important}}
+@media(max-width:900px){.horizontal-nav{display:none}.mobile-bottom-nav{display:grid!important}.layout{display:block;min-height:calc(100vh - 66px)}main{padding-bottom:88px}}
 main{width:100%;max-width:1800px;margin:0 auto;padding:clamp(18px,2.4vw,36px)}
 .ph{align-items:center;margin-bottom:22px}.ph h2{font-size:clamp(22px,2vw,29px)}
 .stats{grid-template-columns:repeat(auto-fit,minmax(205px,1fr));gap:16px}
