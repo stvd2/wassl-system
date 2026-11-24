@@ -2,8 +2,6 @@
 -- Transactional primitives used only by the trusted server API.
 begin;
 
--- Approval is claimed with a compare-and-set status transition so concurrent
--- administrators cannot provision the same request twice.
 alter table public.auth_requests drop constraint if exists auth_requests_status_check;
 alter table public.auth_requests add constraint auth_requests_status_check
   check (status in ('pending','processing','approved','rejected'));
@@ -18,8 +16,9 @@ alter table public.wasl_api_rate_limits enable row level security;
 revoke all on public.wasl_api_rate_limits from public, anon, authenticated;
 grant all on public.wasl_api_rate_limits to service_role;
 
-create or replace function public.wasl_consume_rate_limit(p_key_hash text, p_limit integer default 5, p_window_seconds integer default 900)
-returns boolean
+create or replace function public.wasl_consume_rate_limit(
+  p_key_hash text, p_limit integer default 5, p_window_seconds integer default 900
+) returns boolean
 language plpgsql
 security definer
 set search_path = public
@@ -41,7 +40,42 @@ begin
 end;
 $$;
 
-create or replace function public.wasl_append_auth_notification(\n  p_request_id uuid, p_full_name text, p_employee_number text, p_tracking_no text\n) returns void\nlanguage plpgsql\nsecurity definer\nset search_path = public\nas $\ndeclare\n  v_notification jsonb;\nbegin\n  v_notification := jsonb_build_object(\n    'id', 'N_AUTH_' || p_request_id::text, 'role', 'admin', 'user_id', null,\n    'referral_id', null, 'title', 'طلب تسجيل موظف جديد',\n    'message', p_full_name || ' (' || p_employee_number || ') — ' || p_tracking_no,\n    'type', 'user_registration', 'read', false, 'created_at', now(), 'from_user', 'النظام'\n  );\n  update public.app_state\n  set data = jsonb_set(\n    coalesce(data, '{}'::jsonb), '{notifications}',\n    (select coalesce(jsonb_agg(item), '[]'::jsonb)\n     from (select value as item\n           from jsonb_array_elements(coalesce(data->'notifications','[]'::jsonb) || jsonb_build_array(v_notification)) with ordinality as n(value, ord)\n           order by ord desc limit 1000) retained),\n    true\n  ), updated_at = now()\n  where id = 'main';\nend;\n$;\n\ncreate or replace function public.wasl_create_conversation(
+create or replace function public.wasl_append_auth_notification(
+  p_request_id uuid, p_full_name text, p_employee_number text, p_tracking_no text
+) returns void
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_notification jsonb;
+begin
+  v_notification := jsonb_build_object(
+    'id', 'N_AUTH_' || p_request_id::text, 'role', 'admin', 'user_id', null,
+    'referral_id', null, 'title', 'طلب تسجيل موظف جديد',
+    'message', p_full_name || ' (' || p_employee_number || ') — ' || p_tracking_no,
+    'type', 'user_registration', 'read', false, 'created_at', now(), 'from_user', 'النظام'
+  );
+  update public.app_state
+  set data = jsonb_set(
+    coalesce(data, '{}'::jsonb), '{notifications}',
+    (select coalesce(jsonb_agg(item), '[]'::jsonb)
+     from (
+       select value as item
+       from jsonb_array_elements(
+         case when jsonb_typeof(data->'notifications') = 'array'
+              then data->'notifications' else '[]'::jsonb end
+         || jsonb_build_array(v_notification)
+       ) with ordinality as n(value, ord)
+       order by ord desc limit 1000
+     ) retained),
+    true
+  ), updated_at = now()
+  where id = 'main';
+end;
+$$;
+
+create or replace function public.wasl_create_conversation(
   p_creator uuid, p_type text, p_title text, p_member_ids uuid[]
 ) returns jsonb
 language plpgsql
@@ -93,7 +127,9 @@ $$;
 
 revoke all on function public.wasl_consume_rate_limit(text,integer,integer) from public, anon, authenticated;
 grant execute on function public.wasl_consume_rate_limit(text,integer,integer) to service_role;
-revoke all on function public.wasl_append_auth_notification(uuid,text,text,text) from public, anon, authenticated;\ngrant execute on function public.wasl_append_auth_notification(uuid,text,text,text) to service_role;\nrevoke all on function public.wasl_create_conversation(uuid,text,text,uuid[]) from public, anon, authenticated;
+revoke all on function public.wasl_append_auth_notification(uuid,text,text,text) from public, anon, authenticated;
+grant execute on function public.wasl_append_auth_notification(uuid,text,text,text) to service_role;
+revoke all on function public.wasl_create_conversation(uuid,text,text,uuid[]) from public, anon, authenticated;
 grant execute on function public.wasl_create_conversation(uuid,text,text,uuid[]) to service_role;
 
 commit;
