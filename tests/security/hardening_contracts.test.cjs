@@ -21,6 +21,19 @@ test('registration notification append is atomic in PostgreSQL, not read-modify-
   assert.doesNotMatch(source, /select\('data'\).*app_state/);
 });
 
+test('registration notification fails closed when app_state.main is absent', () => {
+  const migration = read('database/005_atomic_registration_and_conversations.sql');
+  assert.match(migration, /get diagnostics v_updated = row_count/);
+  assert.match(migration, /app_state\.main is missing; registration notification was not persisted/);
+});
+
+test('rate-limit cleanup keeps a one-day minimum retention and service-role-only execution', () => {
+  const migration = read('database/005_atomic_registration_and_conversations.sql');
+  assert.match(migration, /wasl_cleanup_rate_limits/);
+  assert.match(migration, /p_retention_seconds < 86400/);
+  assert.match(migration, /revoke all on function public\.wasl_cleanup_rate_limits\(integer\)[\s\S]*to service_role/);
+});
+
 test('approval uses a compare-and-set claim and only approves a claimed request', () => {
   const source = read('api/auth-requests-approve.js');
   const migration = read('database/005_atomic_registration_and_conversations.sql');
@@ -52,6 +65,18 @@ test('attachment download requires an existing metadata record and matching conv
   assert.match(source, /isMember\(conversationId, auth\.authUser\.id\)/);
   assert.match(source, /if \(!record \|\| record\.conversation_id !== conversationId\)/);
   assert.match(source, /if \(record && record\.conversation_id !== conversationId\)/);
+});
+
+test('acceptance letters require a real outgoing referral and coordinator/admin upload', () => {
+  const source = read('api/attachment.js');
+  assert.match(source, /category !== 'acceptance_letter'/);
+  assert.match(source, /outgoing_referrals/);
+  assert.match(source, /\['coordinator', 'admin'\]\.includes\(role\)/);
+  assert.match(source, /linkedId !== id/);
+  assert.match(source, /ACCEPTANCE_MIME_TYPES/);
+  assert.match(source, /acceptance_letters\/\$\{referralId\}\/\$\{id\}/);
+  assert.match(source, /معرّف المرفق مستخدم في مرفق محادثة/);
+  assert.match(source, /matchesMagic\(contentType, body\)/);
 });
 
 test('legacy service-role state routes fail closed', () => {
