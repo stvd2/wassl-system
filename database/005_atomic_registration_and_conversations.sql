@@ -35,7 +35,7 @@ begin
 end;
 $$;
 
-create or replace function public.wasl_create_conversation(
+create or replace function public.wasl_append_auth_notification(\n  p_request_id uuid, p_full_name text, p_employee_number text, p_tracking_no text\n) returns void\nlanguage plpgsql\nsecurity definer\nset search_path = public\nas $\ndeclare\n  v_notification jsonb;\nbegin\n  v_notification := jsonb_build_object(\n    'id', 'N_AUTH_' || p_request_id::text, 'role', 'admin', 'user_id', null,\n    'referral_id', null, 'title', 'طلب تسجيل موظف جديد',\n    'message', p_full_name || ' (' || p_employee_number || ') — ' || p_tracking_no,\n    'type', 'user_registration', 'read', false, 'created_at', now(), 'from_user', 'النظام'\n  );\n  update public.app_state\n  set data = jsonb_set(\n    coalesce(data, '{}'::jsonb), '{notifications}',\n    (select coalesce(jsonb_agg(item), '[]'::jsonb)\n     from (select value as item\n           from jsonb_array_elements(coalesce(data->'notifications','[]'::jsonb) || jsonb_build_array(v_notification)) with ordinality as n(value, ord)\n           order by ord desc limit 1000) retained),\n    true\n  ), updated_at = now()\n  where id = 'main';\nend;\n$;\n\ncreate or replace function public.wasl_create_conversation(
   p_creator uuid, p_type text, p_title text, p_member_ids uuid[]
 ) returns jsonb
 language plpgsql
@@ -50,8 +50,8 @@ begin
   if p_creator is null or p_type not in ('direct','group') then
     raise exception 'invalid conversation request' using errcode = '22023';
   end if;
-  select array_agg(distinct x) into v_ids
-  from unnest(coalesce(p_member_ids, array[]::uuid[]) || array[p_creator]) as x;
+  select array_agg(distinct member_id) into v_ids
+  from unnest(coalesce(p_member_ids, array[]::uuid[]) || array[p_creator]) as requested(member_id);
   if p_type = 'direct' and coalesce(array_length(v_ids,1),0) <> 2 then
     raise exception 'direct conversation requires two members' using errcode = '22023';
   end if;
@@ -66,7 +66,7 @@ begin
   insert into public.conversation_members(conversation_id,user_id,member_role)
   select v_conversation.id, member_id,
          case when member_id = p_creator then 'owner' else 'member' end
-  from unnest(v_ids) as member_id;
+  from unnest(v_ids) as requested(member_id);
 
   select jsonb_agg(jsonb_build_object(
     'conversation_id', conversation_id,
@@ -87,7 +87,7 @@ $$;
 
 revoke all on function public.wasl_consume_rate_limit(text,integer,integer) from public, anon, authenticated;
 grant execute on function public.wasl_consume_rate_limit(text,integer,integer) to service_role;
-revoke all on function public.wasl_create_conversation(uuid,text,text,uuid[]) from public, anon, authenticated;
+revoke all on function public.wasl_append_auth_notification(uuid,text,text,text) from public, anon, authenticated;\ngrant execute on function public.wasl_append_auth_notification(uuid,text,text,text) to service_role;\nrevoke all on function public.wasl_create_conversation(uuid,text,text,uuid[]) from public, anon, authenticated;
 grant execute on function public.wasl_create_conversation(uuid,text,text,uuid[]) to service_role;
 
 commit;
