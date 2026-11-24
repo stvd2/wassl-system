@@ -814,17 +814,28 @@ function openAttsDB() {
   });
   return ATTS_DB_PROMISE;
 }
+function attachmentUrl(id, context = {}) {
+  const query = new URLSearchParams({
+    ...(context.referral_id ? { referral_id: context.referral_id } : {}),
+    ...(context.category ? { category: context.category } : {}),
+    ...(context.conversation_id ? { conversation_id: context.conversation_id } : {})
+  });
+  return API_BASE + '/api/attachment?id=' + encodeURIComponent(id) + (query.toString() ? '&' + query.toString() : '');
+}
 async function attsPut(id, blob, context = {}) {
   if (blob.size > ATTACHMENT_MAX_BYTES) throw new Error('الحد الحالي للمرفق 4 م.ب؛ الملفات الأكبر تتطلب مسار رفع مباشر وآمن');
   ACTIVE_ATTACHMENT_UPLOADS++;
   try {
-    const res = await fetch(API_BASE + '/api/attachment?id=' + encodeURIComponent(id), {
+    const res = await fetch(attachmentUrl(id, context), {
       method: 'PUT',
       headers: { 'Content-Type': blob.type || 'application/octet-stream', ...(context.referral_id ? {'X-Referral-Id': context.referral_id} : {}), ...(context.category ? {'X-Attachment-Category': context.category} : {}), ...(context.conversation_id ? {'X-Conversation-Id': context.conversation_id} : {}) },
       body: blob,
       cache: 'no-store'
     });
-    if (!res.ok) throw new Error(`فشل رفع المرفق (${res.status})`);
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({}));
+      throw new Error(body.error || `فشل رفع المرفق (${res.status})`);
+    }
     try {
       const db = await openAttsDB();
       await new Promise((resolve, reject) => {
@@ -839,7 +850,7 @@ async function attsPut(id, blob, context = {}) {
 async function attsGet(id, context = {}) {
   // المصدر المشترك أولاً حتى لا تعرض نسخة IndexedDB قديمة على جهاز آخر.
   try {
-    const remote = await fetch(API_BASE + '/api/attachment?id=' + encodeURIComponent(id), { cache: 'no-store', headers: { ...(context.referral_id ? {'X-Referral-Id': context.referral_id} : {}), ...(context.category ? {'X-Attachment-Category': context.category} : {}), ...(context.conversation_id ? {'X-Conversation-Id': context.conversation_id} : {}) } });
+    const remote = await fetch(attachmentUrl(id, context), { cache: 'no-store', headers: { ...(context.referral_id ? {'X-Referral-Id': context.referral_id} : {}), ...(context.category ? {'X-Attachment-Category': context.category} : {}), ...(context.conversation_id ? {'X-Conversation-Id': context.conversation_id} : {}) } });
     if (remote.ok) {
       const blob = await remote.blob();
       try { const db = await openAttsDB(); await new Promise((res, rej) => {
