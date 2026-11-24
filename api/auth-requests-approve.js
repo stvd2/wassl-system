@@ -19,6 +19,9 @@ async function existingAuthUser(email) {
 }
 module.exports = async function handler(req, res) {
   const requestId = crypto.randomUUID();
+  let claimedRequestId = null;
+  let createdAuthUserId = null;
+  let profileCreated = false;
   try {
     const auth = await requireUser(req, { roles: ['admin'] });
     if (!auth.ok) return json(res, auth.status, { error: auth.error, request_id: requestId });
@@ -33,6 +36,10 @@ module.exports = async function handler(req, res) {
     if (found.error) throw found.error;
     if (!found.data) return json(res, 404, { error: 'الطلب غير موجود أو تمت معالجته', request_id: requestId });
     const request = found.data;
+    const claim = await admin.from('auth_requests').update({ status: 'processing' }).eq('id', id).eq('status', 'pending').select('id').maybeSingle();
+    if (claim.error) throw claim.error;
+    if (!claim.data) return json(res, 409, { error: 'طلب التسجيل قيد المعالجة أو تمت معالجته بالفعل', request_id: requestId });
+    claimedRequestId = id;
     // Check the employee-number binding before touching Supabase Auth. This
     // prevents a conflicting request from changing an existing account password.
     const conflict = await admin.from('user_profiles').select('auth_user_id, employee_number').eq('employee_number', request.employee_number).maybeSingle();
@@ -48,25 +55,32 @@ module.exports = async function handler(req, res) {
 
     let authUser = await existingAuthUser(email);
     if (authUser) {
-      // Never reset or mutate a pre-existing Auth account during approval.
-      // Reconcile legacy/orphaned accounts explicitly instead of guessing ownership.
+      await admin.from('auth_requests').update({ status: 'pending' }).eq('id', id).eq('status', 'processing');
+      claimedRequestId = null;
       return json(res, 409, { error: existingProfileUserId === authUser.id ? 'يوجد حساب مرتبط مسبقاً؛ راجع الحساب بدلاً من إعادة تعيين كلمة مروره عبر طلب التسجيل' : 'يوجد حساب Auth بهذا المعرّف دون ربط موثوق؛ يلزم التحقق اليدوي قبل الاعتماد', request_id: requestId });
     }
     const created = await admin.auth.admin.createUser({ email, password, email_confirm: true, user_metadata: { employee_number: request.employee_number, full_name: request.full_name, mobile: request.mobile } });
     if (created.error) throw created.error;
     authUser = created.data.user;
+    createdAuthUserId = authUser.id;
 
     const profileWrite = await admin.from('user_profiles').upsert({ auth_user_id: authUser.id, employee_number: request.employee_number, email, full_name: request.full_name, mobile: request.mobile, role, department, active: true, must_change_password: true, password_changed_at: null }, { onConflict: 'auth_user_id' });
     if (profileWrite.error) throw profileWrite.error;
+    profileCreated = true;
     const profile = await admin.from('user_profiles').select('auth_user_id, employee_number, full_name, mobile, role, department, active, must_change_password, created_at, updated_at').eq('auth_user_id', authUser.id).maybeSingle();
     if (profile.error) throw profile.error;
     if (!profile.data) throw new Error('تم إنشاء حساب Auth لكن تعذر إنشاء ملف المستخدم');
-    const updatedRequest = await admin.from('auth_requests').update({ status: 'approved', reviewed_by: auth.authUser.id, reviewed_at: new Date().toISOString() }).eq('id', id).eq('status', 'pending');
+    const updatedRequest = await admin.from('auth_requests').update({ status: 'approved', reviewed_by: auth.authUser.id, reviewed_at: new Date().toISOString() }).eq('id', id).eq('status', 'processing');
     if (updatedRequest.error) throw updatedRequest.error;
+    claimedRequestId = null;
     const approvedRequest = await admin.from('auth_requests').select('*').eq('id', id).maybeSingle();
     if (approvedRequest.error) throw approvedRequest.error;
     return json(res, 200, { ok: true, user: profile.data, temporary_password: password, request: approvedRequest.data ? safe(approvedRequest.data) : null, request_id: requestId });
   } catch (e) {
+    // Compensate any partial provisioning and release the request claim.
+    if (profileCreated && createdAuthUserId) await admin.from('user_profiles').delete().eq('auth_user_id', createdAuthUserId);
+    if (createdAuthUserId) await admin.auth.admin.deleteUser(createdAuthUserId);
+    if (claimedRequestId) await admin.from('auth_requests').update({ status: 'pending' }).eq('id', claimedRequestId).eq('status', 'processing');
     console.error('[WASL] /api/auth-requests-approve:', requestId, e.message);
     return json(res, 500, { error: 'تعذر اعتماد الطلب وإنشاء الحساب', request_id: requestId });
   }
