@@ -26,6 +26,10 @@ function requestValue(req, key) {
   try { return new URL(rawUrl, 'http://localhost').searchParams.get(key) || ''; } catch (_) { return ''; }
 }
 function conversationFrom(req) { return uuid(requestValue(req, 'conversation_id') || req.headers['x-conversation-id']); }
+function legacyConversationFrom(value) {
+  const text = String(value || '').trim();
+  return /^C_[A-Za-z0-9_-]{8,120}$/.test(text) ? text : '';
+}
 function messageFrom(req) { return uuid(requestValue(req, 'message_id') || req.headers['x-message-id']); }
 function outgoingContextFrom(req) {
   const referralId = String(requestValue(req, 'referral_id') || req.headers['x-referral-id'] || '').trim();
@@ -96,6 +100,45 @@ async function regularReferral(referralId) {
   if (error) throw error;
   const referrals = Array.isArray(data?.data?.referrals) ? data.data.referrals : [];
   return referrals.find(item => String(item?.id || '') === referralId) || null;
+}
+async function legacyConversationForMember(conversationId, auth) {
+  const { data, error } = await admin.from('app_state').select('data').eq('id', 'main').maybeSingle();
+  if (error) throw error;
+  const state = data?.data || {};
+  const chat = (Array.isArray(state.chats) ? state.chats : []).find(item => String(item?.id || '') === conversationId);
+  if (!chat) return null;
+  const profile = auth.profile || {};
+  const authId = String(auth.authUser?.id || '');
+  const legacyIds = new Set([authId, profile.employee_number, profile.username, profile.full_name].filter(Boolean).map(String));
+  for (const user of (Array.isArray(state.users) ? state.users : [])) {
+    if (String(user?.auth_user_id || '') === authId || String(user?.employee_number || user?.username || '') === String(profile.employee_number || '')) legacyIds.add(String(user.id || ''));
+  }
+  let member = false;
+  if (chat.type === 'direct' || chat.category === 'custom') member = (chat.members || []).some(id => legacyIds.has(String(id)));
+  else if (chat.category === 'all' || chat.category === profile.role) member = true;
+  return member ? chat : null;
+}
+async function handleLegacyConversation(req, res, auth, conversationId, id, multipart) {
+  if (req.method === 'PUT' || req.method === 'POST') {
+    const contentType = String(multipart?.contentType || req.headers['content-type'] || 'application/octet-stream').split(';')[0].toLowerCase();
+    if (!MIME_TYPES.has(contentType)) return send(res, 415, JSON.stringify({ error: 'نوع الملف غير مسموح' }));
+    const body = multipart ? multipart.body : await readBody(req);
+    if (!body.length || body.length > MAX_BYTES) return send(res, 413, JSON.stringify({ error: 'حجم الملف غير صالح' }));
+    const { error } = await supabase.storage.from(BUCKET).upload(id, body, { contentType, upsert: false, cacheControl: '3600' });
+    if (error) throw error;
+    return send(res, 200, JSON.stringify({ ok: true, id, attachment: { id, conversation_id: conversationId, original_name: originalNameFrom(req, id), mime_type: contentType, size: body.length, uploaded_by: auth.authUser.id, uploaded_at: new Date().toISOString() } }));
+  }
+  if (req.method === 'GET') {
+    const { data, error } = await supabase.storage.from(BUCKET).download(id);
+    if (error || !data) return send(res, 404, JSON.stringify({ error: 'المرفق غير موجود' }));
+    const body = Buffer.from(await data.arrayBuffer()); res.statusCode = 200; res.setHeader('Content-Type', data.type || 'application/octet-stream'); res.setHeader('Content-Length', String(body.length)); res.setHeader('Cache-Control', 'private, no-store'); return res.end(body);
+  }
+  if (req.method === 'DELETE') {
+    const { error } = await supabase.storage.from(BUCKET).remove([id]);
+    if (error && !String(error.message || '').toLowerCase().includes('not found')) throw error;
+    return send(res, 200, JSON.stringify({ ok: true, id }));
+  }
+  res.setHeader('Allow', 'GET, PUT, POST, DELETE'); return send(res, 405, JSON.stringify({ error: 'method not allowed' }));
 }
 function canAccessOutgoing(referral, auth) {
   const role = String(auth.profile?.role || '');
@@ -191,11 +234,17 @@ module.exports = async function handler(req, res) {
     const auth = await requireUser(req, { roles: ['admin', 'coordinator', 'doctor', 'beds'] });
     if (!auth.ok) return send(res, auth.status, JSON.stringify({ error: auth.error }));
     const multipart = (req.method === 'PUT' || req.method === 'POST') ? await readMultipartUpload(req) : null;
-    const conversationId = uuid(requestValue(req, 'conversation_id') || req.headers['x-conversation-id'] || multipart?.conversationId);
+    const rawConversationId = requestValue(req, 'conversation_id') || req.headers['x-conversation-id'] || multipart?.conversationId;
+    const conversationId = uuid(rawConversationId);
+    const legacyConversationId = legacyConversationFrom(rawConversationId);
     const outgoing = outgoingContextFrom(req); if (!outgoing) return send(res, 400, JSON.stringify({ error: 'سياق المرفق غير صالح' }));
     if (outgoing.category === 'acceptance_letter') return handleOutgoing(req, res, auth, outgoing, id);
     if (outgoing.category === 'referral_attachment') return handleRegularReferral(req, res, auth, outgoing, id);
     if (outgoing.category) return send(res, 400, JSON.stringify({ error: 'فئة المرفق غير معروفة' }));
+    if (legacyConversationId) {
+      if (!(await legacyConversationForMember(legacyConversationId, auth))) return send(res, 403, JSON.stringify({ error: 'لا تملك عضوية هذه المحادثة' }));
+      return handleLegacyConversation(req, res, auth, legacyConversationId, id, multipart);
+    }
     if (!conversationId) return send(res, 400, JSON.stringify({ error: 'conversation_id مطلوب للتحقق من عضوية المرفق' }));
     if (!(await isMember(conversationId, auth.authUser.id))) return send(res, 403, JSON.stringify({ error: 'لا تملك عضوية هذه المحادثة' }));
     let record = await attachmentFor(path);
