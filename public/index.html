@@ -1812,21 +1812,25 @@ async function finishAuthenticatedBoot() {
   if (!DATA) DATA = initData();
   const authUserId = String(CURRENT_USER?.auth_user_id || CURRENT_USER?.id || '');
   const linkedUser = DATA.users.find(u => String(u.auth_user_id || '') === authUserId || String(u.employee_number || u.username || '') === String(CURRENT_USER?.employee_number || ''));
+  let normalizedLegacyChats = false;
   if (linkedUser) {
     CURRENT_USER = { ...linkedUser, auth_user_id: authUserId || linkedUser.auth_user_id };
-    let normalizedLegacyChats = false;
+  }
+  CONFIRMED_STATE = JSON.parse(JSON.stringify(DATA));
+  LAST_REMOTE_REVISION = Number(DATA.meta?.sync_revision || 0);
+  LOCAL_CHANGE_AT = DATA.meta?.local_updated_at || '';
+  restorePendingJournal();
+  if (linkedUser) {
     for (const chat of (DATA.chats || [])) {
       if (chat.type === 'direct' && Array.isArray(chat.members) && chat.members.includes(null) && !chat.members.includes(linkedUser.id)) {
         chat.members = chat.members.map(memberId => memberId === null ? linkedUser.id : memberId);
         normalizedLegacyChats = true;
       }
     }
-    if (normalizedLegacyChats) saveData();
   }
-  CONFIRMED_STATE = JSON.parse(JSON.stringify(DATA));
-  LAST_REMOTE_REVISION = Number(DATA.meta?.sync_revision || 0);
-  LOCAL_CHANGE_AT = DATA.meta?.local_updated_at || '';
-  restorePendingJournal();
+  // After restoring any pending journal, record compatibility normalization
+  // against an initialized confirmed base instead of blocking sync on boot.
+  if (normalizedLegacyChats) saveData();
   if (!DATA.notifications) DATA.notifications = [];
   if (!DATA.attachments || typeof DATA.attachments !== 'object') DATA.attachments = {};
   if (!Array.isArray(DATA.chats)) DATA.chats = [];

@@ -104,11 +104,18 @@ function chatAttachmentIds(chat, attachments) {
   }
   return [...ids].sort();
 }
-function chatMember(chat, auth) {
+function chatMember(chat, auth, state) {
   const userId = String(auth.authUser.id);
-  if (chat.type === 'direct') return (chat.members || []).map(String).includes(userId);
+  const profile = auth.profile || {};
+  const legacyIds = new Set([userId, profile.employee_number, profile.username, profile.full_name].filter(Boolean).map(String));
+  for (const user of (Array.isArray(state?.users) ? state.users : [])) {
+    if (String(user?.auth_user_id || '') === userId || String(user?.employee_number || user?.username || '') === String(profile.employee_number || '')) {
+      if (user?.id) legacyIds.add(String(user.id));
+    }
+  }
+  if (chat.type === 'direct') return (chat.members || []).some(memberId => legacyIds.has(String(memberId)));
   if (chat.category === 'all') return true;
-  if (chat.category === 'custom') return (chat.members || []).map(String).includes(userId);
+  if (chat.category === 'custom') return (chat.members || []).some(memberId => legacyIds.has(String(memberId)));
   return String(chat.category || '') === String(auth.profile.role || '');
 }
 async function clearChat(auth, body) {
@@ -123,7 +130,7 @@ async function clearChat(auth, body) {
   const revision = Number(current.meta.sync_revision || 0);
   if (expected !== revision) return { status: 409, payload: { error: 'تغيرت الحالة؛ نفّذ مزامنة ثم أعد المحاولة', revision } };
   const chat = (current.chats || []).find(item => String(item.id) === chatId);
-  if (!chat || !chatMember(chat, auth)) return { status: 403, payload: { error: 'لا تملك عضوية هذه المحادثة' } };
+  if (!chat || !chatMember(chat, auth, current)) return { status: 403, payload: { error: 'لا تملك عضوية هذه المحادثة' } };
   const ids = chatAttachmentIds(chat, current.attachments);
   for (let i = 0; i < ids.length; i += 100) {
     const { error } = await supabase.storage.from(BUCKET).remove(ids.slice(i, i + 100));
