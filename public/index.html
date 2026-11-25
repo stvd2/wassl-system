@@ -4,11 +4,24 @@
 <meta name="wasl-build" content="20261122-sync-import-1">
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
+<script>
+  (function(){
+    try {
+      var saved=localStorage.getItem('wasl_makkah_lang') || localStorage.getItem('wasl_language');
+      var lang=saved==='en'?'en':'ar';
+      document.documentElement.lang=lang;
+      document.documentElement.dir=lang==='en'?'ltr':'rtl';
+    } catch(e) { document.documentElement.lang='ar'; document.documentElement.dir='rtl'; }
+  }());
+</script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Cairo:wght@400;600;700&family=IBM+Plex+Sans+Arabic:wght@400;500;600;700&display=swap" rel="stylesheet">
 <title>وصل | نظام إدارة الإحالات الطبية</title>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <style>
-:root{--navy:#123047;--teal:#087f78;--bg:#f3f6f8;--card:#fff;--text:#20313d;--muted:#70818c;--line:#e4eaee;--red:#c44747;--green:#17845b;--amber:#a66b12;--purple:#6c4ab0;--shadow:0 8px 28px rgba(20,48,65,.07)}
-*{box-sizing:border-box}html{overflow-x:clip;overscroll-behavior-x:none}body{margin:0;overflow-x:clip;overscroll-behavior-x:none;background:var(--bg);font-family:"Segoe UI",Tahoma,Arial,sans-serif;color:var(--text);font-size:14px;line-height:1.5}
+:root{--navy:#075B50;--teal:#008B72;--teal-soft:#35B8AD;--bg:#F3F6F5;--card:#fff;--text:#20313d;--muted:#70818c;--line:#dfe9e6;--gold:#B9A36A;--red:#c44747;--green:#17845b;--amber:#a66b12;--purple:#6c4ab0;--shadow:0 8px 28px rgba(7,91,80,.08)}
+*{box-sizing:border-box}html{overflow-x:clip;overscroll-behavior-x:none}body{margin:0;overflow-x:clip;overscroll-behavior-x:none;background:var(--bg);font-family:"IBM Plex Sans Arabic","Cairo","Segoe UI",Tahoma,Arial,sans-serif;color:var(--text);font-size:14px;line-height:1.5}
 button{cursor:pointer;border:0;border-radius:10px;padding:10px 16px;font-weight:700;font:inherit;transition:all .15s}
 .primary{background:var(--teal);color:#fff}.primary:hover{background:#066d67}.primary:disabled{opacity:.5;cursor:not-allowed}
 .success{background:var(--green);color:#fff}.success:hover{background:#0f6b48}
@@ -82,6 +95,22 @@ body.modal-open .modal{touch-action:auto}
 .toast{position:fixed;bottom:20px;left:20px;background:#17394b;color:#fff;padding:12px 18px;border-radius:10px;z-index:99;font-size:13px;box-shadow:0 4px 20px rgba(0,0,0,.2);max-width:420px;animation:slideIn .2s}
 .toast.err{background:var(--red)}.toast.ok{background:var(--green)}.toast.warn{background:var(--amber)}
 @keyframes slideIn{from{transform:translateX(-20px);opacity:0}to{transform:translateX(0);opacity:1}}
+/* Makkah Health Cluster direction-safe layout primitives */
+html[dir="ltr"] body{text-align:left}html[dir="rtl"] body{text-align:right}
+[dir="ltr"] .nav,[dir="ltr"] table.t th,[dir="ltr"] table.t td{text-align:left}
+[dir="ltr"] aside{border-left:0;border-right:1px solid var(--line)}
+[dir="ltr"] .chat-side{border-left:0;border-right:1px solid var(--line)}
+[dir="ltr"] .nav .count{margin-right:0;margin-left:auto}
+[dir="ltr"] .notif-item.unread{border-right:0;border-left:3px solid var(--teal)}
+[dir="ltr"] .notif-item.emergency{border-right:0;border-left:4px solid #b91c1c}
+[dir="ltr"] .timeline{padding-right:0;padding-left:32px}
+[dir="ltr"] .timeline::before{right:auto;left:10px}
+[dir="ltr"] .tl-item::before{right:auto;left:-26px}
+[dir="ltr"] .cons-box .cons-section{border-right:1px solid #D7E0E3;border-left:3px solid #5A727A}
+[dir="ltr"] .msg{align-self:flex-end;border-top-left-radius:12px;border-top-right-radius:3px}
+[dir="ltr"] .msg.mine{align-self:flex-start;border-top-left-radius:2px;border-top-right-radius:10px}
+.verbatim{unicode-bidi:isolate;direction:auto;text-align:start;overflow-wrap:anywhere;white-space:pre-wrap}
+@media(max-width:600px){main{padding:16px 12px;padding-bottom:calc(92px + env(safe-area-inset-bottom))}.top{padding-inline:12px}.ur{gap:6px}.tl{gap:7px}.ph{margin-bottom:16px}.searchbox{max-width:none}.modal{padding:16px}.chat-wrap{height:calc(100dvh - 66px - 84px);min-height:300px}}
 .notice{background:#fff8e9;color:#86601b;padding:12px 14px;border-radius:8px;font-size:12.5px;margin-bottom:14px;line-height:1.6;border:1px solid #f0e0b8}
 .notice.danger{background:#fff0f0;color:#a33;border-color:#f0c8c8}
 .notice.info{background:#e8f4f8;color:#1a6b8a;border-color:#b8dde8}
@@ -414,9 +443,24 @@ const WASL_EN = {
   titles:{dashboard:['Dashboard','Overview of all referrals'],create:['New Referral','Register a new case'],outgoing:['All Referrals','All referrals in the system'],outgoing_referrals:['Outgoing','Outgoing referral workflow and follow-up'],forward_consultant:['Doctor Accepted','Referrals accepted by the doctor'],consultation_ready:['Ready Consultations','Consultations ready for printing and closure'],need_supplement:['More Information','Additional clinical information requested'],bed_decisions:['Bed Decisions','Pending bed decisions'],reports:['Reports','Completed referrals'],doctor_inbox:['Inbox','New referrals awaiting your decision'],doctor_responded:['Responded','Your previous decisions'],bed_requests:['Bed Requests','Requests awaiting bed decision'],bed_management:['Bed Management','Bed availability'],users:['Users','Account management'],audit:['Audit Log','System activity'],db_monitor:['Database & Sync','Server and synchronization status'],notifications:['Notifications','Alerts'],shifts:['On-call Roster','On-call schedule']},
   login:{title:'Medical Referral Management System',heading:'Sign in',hint:'Enter your account credentials',username:'Username / Employee ID',password:'Password',forgot:'Forgot password?',click:'Click here',noAccount:"Don't have an account?",register:'Register',track:'Track registration request',trackClick:'Click here',loading:'Loading...'}
 };
-let WASL_LANG = localStorage.getItem('wasl_language') === 'en' ? 'en' : 'ar';
+const WASL_I18N = {
+  storageKey:'wasl_makkah_lang',
+  labels:{
+    ar:{brand:'WASL – Makkah Health Cluster',subtitle:'تجمع مكة الصحي — مستشفيي الملك فيصل بمكة المكرمة',home:'الرئيسية',dashboard:'لوحة المؤشرات',create:'إحالة جديدة',outgoing_referrals:'الصادر',incoming:'الوارد',chat:'المحادثات',notifications:'الإشعارات',menu:'القائمة',reports:'التقارير',users:'المستخدمون',audit:'سجل التدقيق',db_monitor:'مراقبة القاعدة',shifts:'المناوبون',bed_management:'إدارة الأسرة',status:'الحالة',priority:'الأولوية',role:'الدور',normal:'عادية',clinics:'عيادات',emergency:'طارئة',life_saving:'إنقاذ حياة'},
+    en:{brand:'WASL – Makkah Health Cluster',subtitle:'Makkah Health Cluster — King Faisal Hospitals in Makkah',home:'Home',dashboard:'Dashboard',create:'New Referral',outgoing_referrals:'Outgoing',incoming:'Incoming',chat:'Messages',notifications:'Notifications',menu:'Menu',reports:'Reports',users:'Users',audit:'Audit Log',db_monitor:'Database Monitor',shifts:'On-call Roster',bed_management:'Bed Management',status:'Status',priority:'Priority',role:'Role',normal:'Normal',clinics:'Clinics',emergency:'Emergency',life_saving:'Life-saving'}
+  },
+  labelFor(key, fallback){ const set=this.labels[WASL_LANG]||this.labels.ar; return set[key] || (WASL_LANG==='en' ? (WASL_EN.nav[key]||fallback||key) : (fallback||key)); },
+  renderVerbatim(value, tag='span', attrs=''){ return `<${tag} class=\"verbatim\" dir=\"auto\" ${attrs}>${esc(value ?? '')}</${tag}>`; },
+  syncPrintDocument(doc){ if(!doc||!doc.documentElement)return; doc.documentElement.lang=WASL_LANG; doc.documentElement.dir=WASL_LANG==='en'?'ltr':'rtl'; }
+};
+let WASL_LANG = (localStorage.getItem(WASL_I18N.storageKey) || localStorage.getItem('wasl_language')) === 'en' ? 'en' : 'ar';
+function labelFor(key, fallback){ return WASL_I18N.labelFor(key, fallback); }
+function renderVerbatim(value, tag='span', attrs=''){ return WASL_I18N.renderVerbatim(value, tag, attrs); }
+function syncPrintDocument(doc){ return WASL_I18N.syncPrintDocument(doc); }
+function setLanguage(lang){ WASL_LANG=lang==='en'?'en':'ar'; localStorage.setItem(WASL_I18N.storageKey,WASL_LANG); localStorage.setItem('wasl_language',WASL_LANG); applyLanguage(); }
 function tNav(id, fallback){return WASL_LANG==='en'?(WASL_EN.nav[id]||fallback):fallback;}
-function toggleLanguage(){WASL_LANG=WASL_LANG==='ar'?'en':'ar';localStorage.setItem('wasl_language',WASL_LANG);applyLanguage();}
+function toggleLanguage(){setLanguage(WASL_LANG==='ar'?'en':'ar');}
+function updateMobileNavLabels(){ const map={home:'home',chat:'chat',notifications:'notifications',menu:'menu'}; document.querySelectorAll('[data-mobile-nav]').forEach(b=>{const key=map[b.dataset.mobileNav]; const spans=b.querySelectorAll('span'); if(spans[1]) spans[1].childNodes[0].textContent=labelFor(key,spans[1].childNodes[0].textContent.trim())+' ';}); }
 function applyLanguage(){
   const en=WASL_LANG==='en';document.documentElement.lang=en?'en':'ar';document.documentElement.dir=en?'ltr':'rtl';
   const switchText=en?'العربية':'English';document.querySelectorAll('.language-switch').forEach(b=>b.textContent=switchText);
@@ -431,7 +475,7 @@ function applyLanguage(){
   }
   const headerSub=document.querySelector('#app .tl small');if(headerSub)headerSub.textContent=en?WASL_EN.login.title:'نظام إدارة الإحالات الطبية';
   const create=document.getElementById('topCreateReferral');if(create)create.textContent=en?'+ New Referral':'＋ إحالة جديدة';
-  if(typeof buildNav==='function'&&CURRENT_USER){buildNav();if(SECTION_MODAL_ACTIVE&&PAGE)openSectionModal(PAGE);}
+  updateMobileNavLabels();if(typeof buildNav==='function'&&CURRENT_USER){buildNav();if(SECTION_MODAL_ACTIVE&&PAGE)openSectionModal(PAGE);}
 }
 
 // ═══════════════════════════════════════════════════════════════════
@@ -643,6 +687,10 @@ const OUTGOING_STATES = {
   accepted: {label:'تم القبول', cls:'p-done'}, closed:{label:'مغلقة', cls:'p-done'}
 };
 const OUTGOING_SLA_HOURS = { 'عادية':72, 'عيادات':120, 'طارئة':6, 'إنقاذ حياة':1 };
+const displayOutgoingType = v => ({'عادية':labelFor('normal','عادية'),'عيادات':labelFor('clinics','عيادات'),'طارئة':labelFor('emergency','طارئة'),'إنقاذ حياة':labelFor('life_saving','إنقاذ حياة')}[v] || v);
+const displayReferralType = v => WASL_LANG==='en' ? ({'طارئ':'Emergency','تنويم عادي':'Routine Admission','عيادات':'Clinics','استشارة طبية':'Medical Consultation'}[v] || v) : v;
+const displayOutgoingState = v => WASL_LANG==='en' ? ({'مسودة':'Draft','بانتظار المنسق':'Awaiting Coordinator','صادرة رسمياً':'Officially Issued','متابعة مطلوبة':'Follow-up Required','تم القبول':'Accepted','مغلقة':'Closed'}[v] || v) : v;
+const displayReferralState = v => WASL_LANG==='en' ? ({'جديدة':'New','بانتظار الطبيب':'Awaiting Doctor','مقبولة':'Accepted','مرفوضة':'Rejected','مغلقة':'Closed'}[v] || v) : v;
 
 const WARD_OPTIONS = {
   'طارئ':         ['طوارئ', 'عناية مركزة', 'قسم عادي'],
@@ -658,7 +706,7 @@ const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt
 const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
 const nowIso = () => new Date().toISOString();
 const fmtDate = iso => iso ? new Date(iso).toLocaleString('ar-SA', { dateStyle: 'short', timeStyle: 'short' }) : '—';
-const roleLabel = r => ({ coordinator: 'منسق الإحالات', doctor: 'طبيب', beds: 'إدارة الأسرة', admin: 'مدير النظام', pending: 'بانتظار الموافقة' }[r] || r);
+const roleLabel = r => { const ar={coordinator:'منسق الإحالات',doctor:'طبيب',beds:'إدارة الأسرة',admin:'مدير النظام',pending:'بانتظار الموافقة'}; const en={coordinator:'Referral Coordinator',doctor:'Doctor',beds:'Bed Management',admin:'System Administrator',pending:'Pending Approval'}; return (WASL_LANG==='en'?en:ar)[r] || r; };
 const fmtSize = b => { if (!b) return '0 B'; if (b > 1048576) return (b/1048576).toFixed(1)+' م.ب'; if (b > 1024) return Math.round(b/1024)+' ك.ب'; return b+' B'; };
 const refNoOf = r => (r.ref_no || r.id || '');
 const isDirectER = r => r && r.ward_type === 'طوارئ' && r.emergency_admission === true;
@@ -666,7 +714,7 @@ const isConsultation = r => r && r.priority === 'استشارة طبية';
 const typeMetaOf = r => REFERRAL_TYPE_META[r.priority] || { label: r.priority || '—', icon: '📄', chip: '', color: '#475569' };
 const typeChip = r => {
   const m = typeMetaOf(r);
-  return m.label === '—' ? '—' : `<span class="type-chip ${m.chip}">${m.icon} ${esc(m.label)}</span>`;
+  return m.label === '—' ? '—' : `<span class="type-chip ${m.chip}">${m.icon} ${esc(displayReferralType(m.label))}</span>`;
 };
 
 
@@ -2141,11 +2189,11 @@ function renderOutgoingReferrals() {
   const pageNumbers=Array.from(new Set([1,pages,...Array.from({length:5},(_,i)=>OUTGOING_PAGE+i-2).filter(n=>n>=1&&n<=pages)])).sort((a,b)=>a-b);
   const pageButtons=pageNumbers.map((n,i)=>`${i&&n-pageNumbers[i-1]>1?'<span>…</span>':''}<button class="${n===OUTGOING_PAGE?'primary':'ghost'} sm" onclick="outgoingPage(${n})" ${n===OUTGOING_PAGE?'aria-current="page"':''}>${n}</button>`).join('');
   const counts=OUTGOING_TYPES.map(t=>[t,all.filter(r=>r.case_type===t).length]);
-  const rows=visible.map(r=>{const st=OUTGOING_STATES[r.status]||{label:r.status,cls:''}, sla=outgoingSla(r), life=r.case_type==='إنقاذ حياة'; return `<tr class="${life?'outgoing-life':''}"><td><b>${esc(r.id)}</b><div class="muted">${esc(r.patient_name)} — MRN ${esc(r.mrn)}</div></td><td>${esc(r.specialty)}</td><td><span class="pill ${life?'p-r':''}">${life?'🚨 ':''}${esc(r.case_type)}</span></td><td><span class="pill ${st.cls}">${esc(st.label)}</span>${sla.overdue?'<div class="overdue">⏱ متأخرة</div>':''}</td><td>${esc(r.ministerial_ref_no||'—')}</td><td><button class="secondary sm" onclick="openOutgoingDetail('${esc(r.id)}')">عرض</button>${['coordinator','admin'].includes(CURRENT_USER.role)&&['pending_coordinator','follow_up'].includes(r.status)?` <button class="success sm" onclick="issueOutgoing('${esc(r.id)}')">إصدار</button>`:''}${CURRENT_USER.role==='doctor'&&r.status==='issued'?` <button class="ghost sm" onclick="outgoingFollowUp('${esc(r.id)}')">تذكير</button>`:''}</td></tr>`}).join('');
-  $('content').innerHTML=`<div class="outgoing-hero"><div><h3>📤 أرشيف الصادر</h3><p>دورة الإحالة الصادرة فقط — بدون الأسرّة</p></div>${['doctor','coordinator','admin'].includes(CURRENT_USER.role)?'<button class="primary" onclick="openCreateOutgoingModal()">＋ إحالة صادرة جديدة</button>':''}</div><div class="stats">${counts.map(([t,n])=>`<div class="stat"><label>${t}</label><strong>${n}</strong></div>`).join('')}</div><div class="panel"><h3>الحالات المرسلة (${total})</h3><div class="grid2 outgoing-filters"><input class="searchbox" placeholder="بحث بالاسم أو رقم الملف أو الرقم الوزاري" value="${esc(OUTGOING_QUERY)}" oninput="outgoingFilter('query',this.value)"><select onchange="outgoingFilter('specialty',this.value)"><option value="">كل التخصصات</option>${SPECIALTY_OPTIONS.map(x=>`<option value="${esc(x.label)}" ${OUTGOING_SPECIALTY===x.label?'selected':''}>${esc(x.label)}</option>`).join('')}</select><select onchange="outgoingFilter('type',this.value)"><option value="">كل أنواع الحالات</option>${OUTGOING_TYPES.map(x=>`<option value="${x}" ${OUTGOING_TYPE===x?'selected':''}>${x}</option>`).join('')}</select><select onchange="outgoingFilter('status',this.value)"><option value="">كل حالات الإجراء</option>${Object.entries(OUTGOING_STATES).map(([k,v])=>`<option value="${k}" ${OUTGOING_STATUS===k?'selected':''}>${v.label}</option>`).join('')}</select><label style="display:flex;align-items:center;gap:8px;color:var(--muted);font-size:12px">عرض <select onchange="outgoingPageSize(this.value)">${[10,25,50,100].map(n=>`<option value="${n}" ${OUTGOING_PAGE_SIZE===n?'selected':''}>${n} صف</option>`).join('')}</select></label></div>${visible.length?`<div class="twrap"><table class="t"><thead><tr><th>المريض / الرقم</th><th>التخصص</th><th>النوع</th><th>الحالة و SLA</th><th>الرقم الوزاري</th><th></th></tr></thead><tbody>${rows}</tbody></table></div>`:'<div class="empty">لا توجد إحالات صادرة مطابقة</div>'}<nav aria-label="صفحات الصادر" style="display:flex;gap:6px;align-items:center;justify-content:center;margin-top:16px;flex-wrap:wrap"><button class="secondary sm" onclick="outgoingPage(${Math.max(1,OUTGOING_PAGE-1)})" ${OUTGOING_PAGE<=1?'disabled':''}>السابق</button>${pageButtons}<button class="secondary sm" onclick="outgoingPage(${Math.min(pages,OUTGOING_PAGE+1)})" ${OUTGOING_PAGE>=pages?'disabled':''}>التالي</button><span style="font-size:12px;color:var(--muted)">صفحة ${OUTGOING_PAGE} من ${pages} — إجمالي ${total} سجل</span></nav></div>`;
+  const rows=visible.map(r=>{const st=OUTGOING_STATES[r.status]||{label:r.status,cls:''}, sla=outgoingSla(r), life=r.case_type==='إنقاذ حياة'; return `<tr class="${life?'outgoing-life':''}"><td><b>${esc(r.id)}</b><div class="muted">${esc(r.patient_name)} — MRN ${esc(r.mrn)}</div></td><td>${esc(r.specialty)}</td><td><span class="pill ${life?'p-r':''}">${life?'🚨 ':''}${esc(displayOutgoingType(r.case_type))}</span></td><td><span class="pill ${st.cls}">${esc(displayOutgoingState(st.label))}</span>${sla.overdue?'<div class="overdue">⏱ متأخرة</div>':''}</td><td>${esc(r.ministerial_ref_no||'—')}</td><td><button class="secondary sm" onclick="openOutgoingDetail('${esc(r.id)}')">عرض</button>${['coordinator','admin'].includes(CURRENT_USER.role)&&['pending_coordinator','follow_up'].includes(r.status)?` <button class="success sm" onclick="issueOutgoing('${esc(r.id)}')">إصدار</button>`:''}${CURRENT_USER.role==='doctor'&&r.status==='issued'?` <button class="ghost sm" onclick="outgoingFollowUp('${esc(r.id)}')">تذكير</button>`:''}</td></tr>`}).join('');
+  $('content').innerHTML=`<div class="outgoing-hero"><div><h3>📤 أرشيف الصادر</h3><p>دورة الإحالة الصادرة فقط — بدون الأسرّة</p></div>${['doctor','coordinator','admin'].includes(CURRENT_USER.role)?'<button class="primary" onclick="openCreateOutgoingModal()">＋ إحالة صادرة جديدة</button>':''}</div><div class="stats">${counts.map(([t,n])=>`<div class="stat"><label>${displayOutgoingType(t)}</label><strong>${n}</strong></div>`).join('')}</div><div class="panel"><h3>الحالات المرسلة (${total})</h3><div class="grid2 outgoing-filters"><input class="searchbox" placeholder="بحث بالاسم أو رقم الملف أو الرقم الوزاري" value="${esc(OUTGOING_QUERY)}" oninput="outgoingFilter('query',this.value)"><select onchange="outgoingFilter('specialty',this.value)"><option value="">كل التخصصات</option>${SPECIALTY_OPTIONS.map(x=>`<option value="${esc(x.label)}" ${OUTGOING_SPECIALTY===x.label?'selected':''}>${esc(x.label)}</option>`).join('')}</select><select onchange="outgoingFilter('type',this.value)"><option value="">كل أنواع الحالات</option>${OUTGOING_TYPES.map(x=>`<option value="${x}" ${OUTGOING_TYPE===x?'selected':''}>${x}</option>`).join('')}</select><select onchange="outgoingFilter('status',this.value)"><option value="">كل حالات الإجراء</option>${Object.entries(OUTGOING_STATES).map(([k,v])=>`<option value="${k}" ${OUTGOING_STATUS===k?'selected':''}>${displayOutgoingState(v.label)}</option>`).join('')}</select><label style="display:flex;align-items:center;gap:8px;color:var(--muted);font-size:12px">عرض <select onchange="outgoingPageSize(this.value)">${[10,25,50,100].map(n=>`<option value="${n}" ${OUTGOING_PAGE_SIZE===n?'selected':''}>${n} صف</option>`).join('')}</select></label></div>${visible.length?`<div class="twrap"><table class="t"><thead><tr><th>المريض / الرقم</th><th>التخصص</th><th>النوع</th><th>الحالة و SLA</th><th>الرقم الوزاري</th><th></th></tr></thead><tbody>${rows}</tbody></table></div>`:'<div class="empty">لا توجد إحالات صادرة مطابقة</div>'}<nav aria-label="صفحات الصادر" style="display:flex;gap:6px;align-items:center;justify-content:center;margin-top:16px;flex-wrap:wrap"><button class="secondary sm" onclick="outgoingPage(${Math.max(1,OUTGOING_PAGE-1)})" ${OUTGOING_PAGE<=1?'disabled':''}>السابق</button>${pageButtons}<button class="secondary sm" onclick="outgoingPage(${Math.min(pages,OUTGOING_PAGE+1)})" ${OUTGOING_PAGE>=pages?'disabled':''}>التالي</button><span style="font-size:12px;color:var(--muted)">صفحة ${OUTGOING_PAGE} من ${pages} — إجمالي ${total} سجل</span></nav></div>`;
 }
 
-function openOutgoingDetail(id) { const r=DATA.outgoing_referrals.find(x=>x.id===id); if(!r)return; const st=OUTGOING_STATES[r.status]||{}; const sla=outgoingSla(r); lockModalBody(); $('modalRoot').innerHTML=`<div class="modal-back" onclick="if(event.target===this)closeModal()"><div class="modal"><div class="mh"><h3>${r.case_type==='إنقاذ حياة'?'🚨 ':''}${esc(r.patient_name)} — ${esc(r.id)}</h3><button class="ghost sm" onclick="closeModal()">✕</button></div><div class="dgrid"><div class="d"><small>رقم الملف</small><strong>${esc(r.mrn)}</strong></div><div class="d"><small>العمر</small><strong>${esc(r.age)}</strong></div><div class="d"><small>التخصص</small><strong>${esc(r.specialty)}</strong></div><div class="d"><small>النوع</small><strong>${esc(r.case_type)}</strong></div><div class="d"><small>الحالة</small><strong>${esc(st.label)}</strong></div><div class="d"><small>SLA / Aging</small><strong class="${sla.overdue?'overdue':''}">${Math.floor(sla.hours)} ساعة / حد ${sla.limit}</strong></div></div>${r.ministerial_code?`<div class="notice danger">الكود الوزاري: <b>${esc(r.ministerial_code)}</b></div>`:''}${r.ministerial_ref_no?`<div class="notice success">رقم الإحالة الوزاري: <b>${esc(r.ministerial_ref_no)}</b></div>`:''}<div class="panel" style="box-shadow:none"><h3>الطلب السريري</h3><p>${esc(r.clinical_request)}</p></div><div class="panel" style="box-shadow:none"><h3>السجل الزمني (${r.timeline.length})</h3><div class="timeline">${r.timeline.slice().reverse().map(t=>`<div class="tl-item"><div class="tl-header"><b>${esc(t.action)}</b><span class="tl-time">${fmtDate(t.ts)}</span></div><div class="tl-user">${esc(t.user)} — ${roleLabel(t.role)}</div>${t.details?.message?`<div class="tl-detail">${esc(t.details.message)}</div>`:''}</div>`).join('')}</div></div></div></div>`; }
+function openOutgoingDetail(id) { const r=DATA.outgoing_referrals.find(x=>x.id===id); if(!r)return; const st=OUTGOING_STATES[r.status]||{}; const sla=outgoingSla(r); lockModalBody(); $('modalRoot').innerHTML=`<div class="modal-back" onclick="if(event.target===this)closeModal()"><div class="modal"><div class="mh"><h3>${r.case_type==='إنقاذ حياة'?'🚨 ':''}${esc(r.patient_name)} — ${esc(r.id)}</h3><button class="ghost sm" onclick="closeModal()">✕</button></div><div class="dgrid"><div class="d"><small>رقم الملف</small><strong>${esc(r.mrn)}</strong></div><div class="d"><small>العمر</small><strong>${esc(r.age)}</strong></div><div class="d"><small>التخصص</small><strong>${esc(r.specialty)}</strong></div><div class="d"><small>النوع</small><strong>${esc(displayOutgoingType(r.case_type))}</strong></div><div class="d"><small>الحالة</small><strong>${esc(displayOutgoingState(st.label))}</strong></div><div class="d"><small>SLA / Aging</small><strong class="${sla.overdue?'overdue':''}">${Math.floor(sla.hours)} ساعة / حد ${sla.limit}</strong></div></div>${r.ministerial_code?`<div class="notice danger">الكود الوزاري: <b>${esc(r.ministerial_code)}</b></div>`:''}${r.ministerial_ref_no?`<div class="notice success">رقم الإحالة الوزاري: <b>${esc(r.ministerial_ref_no)}</b></div>`:''}<div class="panel" style="box-shadow:none"><h3>الطلب السريري</h3><p>${renderVerbatim(r.clinical_request, 'span')}</p></div><div class="panel" style="box-shadow:none"><h3>السجل الزمني (${r.timeline.length})</h3><div class="timeline">${r.timeline.slice().reverse().map(t=>`<div class="tl-item"><div class="tl-header"><b>${esc(t.action)}</b><span class="tl-time">${fmtDate(t.ts)}</span></div><div class="tl-user">${esc(t.user)} — ${roleLabel(t.role)}</div>${t.details?.message?`<div class="tl-detail">${esc(t.details.message)}</div>`:''}</div>`).join('')}</div></div></div></div>`; }
 
 // ═══════════════════════════════════════════════════════════════════
 // لوحة التحكم
@@ -2180,7 +2228,7 @@ function renderDashboard() {
   const outgoing = DATA.outgoing_referrals || [];
   const outgoingByType = Object.fromEntries(OUTGOING_TYPES.map(t => [t, outgoing.filter(r => r.case_type === t).length]));
   const outgoingOverdue = outgoing.filter(r => outgoingSla(r).overdue).length;
-  const outgoingPanel = `<div class="panel outgoing-dashboard"><div class="ph"><div><h3>📤 المدير الطبي — الصادر</h3><p>إحصائيات دورة الإحالة الصادرة وSLA/Aging</p></div><button class="secondary sm" onclick="showPage('outgoing_referrals')">فتح الأرشيف</button></div><div class="stats">${OUTGOING_TYPES.map(t=>`<div class="stat"><label>${t}</label><strong>${outgoingByType[t]}</strong></div>`).join('')}<div class="stat"><label>حالات متأخرة</label><strong class="${outgoingOverdue?'overdue':''}">${outgoingOverdue}</strong></div></div></div>`;
+  const outgoingPanel = `<div class="panel outgoing-dashboard"><div class="ph"><div><h3>📤 المدير الطبي — الصادر</h3><p>إحصائيات دورة الإحالة الصادرة وSLA/Aging</p></div><button class="secondary sm" onclick="showPage('outgoing_referrals')">فتح الأرشيف</button></div><div class="stats">${OUTGOING_TYPES.map(t=>`<div class="stat"><label>${displayOutgoingType(t)}</label><strong>${outgoingByType[t]}</strong></div>`).join('')}<div class="stat"><label>حالات متأخرة</label><strong class="${outgoingOverdue?'overdue':''}">${outgoingOverdue}</strong></div></div></div>`;
   const recent = all.slice().sort((a, b) => new Date(b.updated_at || b.created_at) - new Date(a.updated_at || a.created_at)).slice(0, 8);
   const typeEntries = REFERRAL_TYPES.map(t => ({ type: t, count: byType[t] || 0, meta: REFERRAL_TYPE_META[t] }));
 
@@ -2223,7 +2271,7 @@ function renderList(p) {
   const pageButtons = pageNumbers.map((n, i) => `${i && n - pageNumbers[i - 1] > 1 ? '<span>…</span>' : ''}<button class="${n === LIST_PAGE ? 'primary' : 'ghost'} sm" onclick="setListPage(${n})" ${n === LIST_PAGE ? 'aria-current="page"' : ''}>${n}</button>`).join('');
   $('content').innerHTML = `<div class="panel">
     <h3>القائمة (${totalRecords})</h3>
-    <div class="grid2" style="margin-bottom:14px"><input class="searchbox" value="${esc(LIST_QUERY)}" placeholder="بحث..." oninput="setListQuery(this.value, '${p}')"><select onchange="setListFilter('status',this.value,'${p}')"><option value="">كل الحالات</option>${Object.entries(STATES).map(([key,val]) => `<option value="${esc(key)}" ${LIST_STATUS === key ? 'selected' : ''}>${esc(val.label)}</option>`).join('')}</select><select onchange="setListFilter('type',this.value,'${p}')"><option value="">كل الأنواع</option>${REFERRAL_TYPES.map(type => `<option value="${esc(type)}" ${LIST_TYPE === type ? 'selected' : ''}>${esc(type)}</option>`).join('')}</select><select onchange="setListFilter('dept',this.value,'${p}')"><option value="">كل التخصصات</option>${DEPARTMENTS.map(dept => `<option value="${esc(dept)}" ${LIST_DEPT === dept ? 'selected' : ''}>${esc(dept)}</option>`).join('')}</select><label style="display:flex;align-items:center;gap:8px;color:var(--muted);font-size:12px">عرض <select aria-label="حجم صفحة الإحالات" onchange="setListPageSize(this.value,'${p}')">${[10,25,50,100].map(n => `<option value="${n}" ${LIST_PAGE_SIZE === n ? 'selected' : ''}>${n} صف</option>`).join('')}</select></label></div>
+    <div class="grid2" style="margin-bottom:14px"><input class="searchbox" value="${esc(LIST_QUERY)}" placeholder="بحث..." oninput="setListQuery(this.value, '${p}')"><select onchange="setListFilter('status',this.value,'${p}')"><option value="">كل الحالات</option>${Object.entries(STATES).map(([key,val]) => `<option value="${esc(key)}" ${LIST_STATUS === key ? 'selected' : ''}>${esc(displayReferralState(val.label))}</option>`).join('')}</select><select onchange="setListFilter('type',this.value,'${p}')"><option value="">كل الأنواع</option>${REFERRAL_TYPES.map(type => `<option value="${esc(type)}" ${LIST_TYPE === type ? 'selected' : ''}>${esc(displayReferralType(type))}</option>`).join('')}</select><select onchange="setListFilter('dept',this.value,'${p}')"><option value="">كل التخصصات</option>${DEPARTMENTS.map(dept => `<option value="${esc(dept)}" ${LIST_DEPT === dept ? 'selected' : ''}>${esc(dept)}</option>`).join('')}</select><label style="display:flex;align-items:center;gap:8px;color:var(--muted);font-size:12px">عرض <select aria-label="حجم صفحة الإحالات" onchange="setListPageSize(this.value,'${p}')">${[10,25,50,100].map(n => `<option value="${n}" ${LIST_PAGE_SIZE === n ? 'selected' : ''}>${n} صف</option>`).join('')}</select></label></div>
     <div id="listWrap">${tableHTML(visible)}</div>
     <nav aria-label="صفحات الإحالات" style="display:flex;gap:6px;align-items:center;justify-content:center;margin-top:16px;flex-wrap:wrap"><button class="secondary sm" onclick="setListPage(${Math.max(1, LIST_PAGE - 1)})" ${LIST_PAGE <= 1 ? 'disabled' : ''}>السابق</button>${pageButtons}<button class="secondary sm" onclick="setListPage(${Math.min(totalPages, LIST_PAGE + 1)})" ${LIST_PAGE >= totalPages ? 'disabled' : ''}>التالي</button><span style="font-size:12px;color:var(--muted)">صفحة ${LIST_PAGE} من ${totalPages} — إجمالي ${totalRecords} سجل</span></nav>
   </div>`;
@@ -2568,7 +2616,7 @@ function openDetail(id) {
     <div class="dgrid">${fields.map(x => `<div class="d"><small>${esc(x[0])}</small><strong>${esc(x[1] || '—')}</strong></div>`).join('')}</div>
     <div class="panel" style="box-shadow:none;margin:0 0 14px 0"><h3>التشخيص</h3>
       <p style="line-height:1.8">${esc(r.diagnosis)}</p>
-      ${r.notes ? `<div style="color:var(--muted);margin-top:10px;font-size:12.5px">📝 ${esc(r.notes)}</div>` : ''}
+      ${r.notes ? `<div style="color:var(--muted);margin-top:10px;font-size:12.5px">📝 ${renderVerbatim(r.notes, 'span')}</div>` : ''}
     </div>
     ${rejectionNotice}
     ${consBlock}
@@ -3162,7 +3210,7 @@ async function openPrint(id) {
   try { await preloadLogos(); } catch(e) {}
   const html = buildPrintDocument(tpl, d);
   audit('print_opened', 'referral', id, tpl);
-  w.document.open(); w.document.write(html); w.document.close();
+  w.document.open(); w.document.write(html); w.document.close(); syncPrintDocument(w.document);
 
   let polls = 0;
   const check = () => {
@@ -3608,7 +3656,7 @@ function renderMessage(chat, m) {
   const time = new Date(m.ts).toLocaleTimeString('ar-SA', { hour: '2-digit', minute: '2-digit' });
   return `<div class="msg ${mine ? 'mine' : ''}">
     ${isGroup && !mine ? `<div class="sender">${esc(m.from_name)}</div>` : ''}
-    ${m.text ? `<div class="txt">${esc(m.text)}</div>` : ''}
+    ${m.text ? renderVerbatim(m.text, 'div', 'class=\"txt\"') : ''}
     ${atts.length ? `<div class="atts">${atts.map(a => {
       if ((a.type || '').startsWith('image/')) {
         return `<div class="att-file" onclick="previewAtt('${a.id}')" style="padding:3px"><img data-att="${a.id}" alt="${esc(a.name)}" style="max-width:220px;max-height:220px;border-radius:6px;display:block;cursor:pointer" loading="lazy"></div>`;
