@@ -1,70 +1,56 @@
-# نظام وَصْل (Wassl)
+# نظام وَصْل (Wasl) v1.1
 
-نظام إدارة الإحالات الطبية — متصل بقاعدة بيانات **Supabase**.
+نظام إدارة الإحالات الطبية، مبني وفق المواصفة المعتمدة في `docs/wasl-spec-v1.1.md`.
 
-يدعم وضعين للتشغيل:
-- **محلياً** عبر خادم Node/Express (`backend/`).
-- **منشوراً على Vercel** عبر Serverless Functions (`api/`).
+## الهيكل الحالي
 
-## البنية
-
-```
-wassl-system/
-├── public/          → الواجهة الثابتة (index.html + tools/export.html)
-├── api/             → دوال Vercel serverless (/api/state, /api/import, /api/health)
-├── backend/         → خادم Node/Express للتشغيل المحلي
-├── database/        → schema.sql (مخطط قاعدة البيانات)
-├── backup/          → نسخة احتياطية من الملف الأصلي
-├── package.json     → تبعيات دوال Vercel
-└── .gitignore
+```text
+frontend/       مساحة واجهة v1 العربية RTL
+backend/src/    Backend v1 الطبقي TypeScript/Express
+api/            محولات Vercel ومسارات التوافق وv1
+legacy/         نسخة النظام القديم المعزولة مؤقتًا
+ database/      ترحيلات Supabase العلائقية
+ tests/          اختبارات الأمن والعقود والتكامل
+ docs/           المواصفة وخطط وتقارير التدقيق
 ```
 
-## المتطلبات
+المصدر التشغيلي لـ v1 هو الجداول العلائقية في Supabase وواجهات `/api/v1`. لا يقرأ Backend v1 `app_state` أو `user_profiles`. تبقى ملفات `legacy/` ومسارات `/api/state` محفوظة مؤقتًا للتوافق والرجوع، ولا يجوز تطوير ميزات جديدة عليها.
 
-- Node.js v18 أو أحدث.
-- مشروع Supabase جاهز (Project URL + المفتاح السري `sb_secret_...` / `service_role`).
-
-## إعداد قاعدة البيانات (مرة واحدة)
-
-افتح Supabase ← `SQL Editor` ← الصق محتوى `database/schema.sql` كاملاً ← `Run`.
-
-## التشغيل المحلي
+## تشغيل Backend v1 محليًا
 
 ```bash
 cd backend
-copy .env.example .env     # عبّئ SUPABASE_URL و SUPABASE_SERVICE_ROLE_KEY
+cp .env.example .env
 npm install
+npm run typecheck
+npm run build
 npm start
 ```
-ثم افتح المتصفح على: **http://localhost:3001**
 
-## النشر على Vercel
+نقطة التشغيل المحلية هي `http://localhost:3001`، وتتوفر مسارات:
 
-1. ارفع المشروع إلى مستودع GitHub.
-2. في [Vercel](https://vercel.com): **Add New → Project → Import Git Repository** ← اختر المستودع.
-3. أضف متغيري البيئة في **Settings → Environment Variables**:
-   - `SUPABASE_URL`
-   - `SUPABASE_SERVICE_ROLE_KEY`
-4. اضغط **Deploy**. Vercel يكتشف `public/` (الملفات الثابتة) و `api/` (الدوال) تلقائياً.
+- `GET /api/v1/health`
+- `GET /api/v1/health/deep`
+- `GET /api/v1/metrics`
+- `GET /api/v1/referrals` مع Bearer JWT
+- `POST /api/v1/referrals` للمنسق أو المدير
+- `POST /api/v1/referrals/:id/transitions`
 
-## ترحيل البيانات الحالية (من localStorage)
+## الاختبارات
 
-- **تلقائياً:** عند أول فتح للتطبيق بعد التوصيل، إن لم يجد الخادم بيانات ووجد نسخة محلية، يرفعها إلى Supabase تلقائياً.
-- **يدوياً:** افتح `tools/export.html` (محلياً) أو `https://your-app.vercel.app/tools/export.html` واضغط «إرسال البيانات إلى الخادم».
+من جذر المستودع:
 
-## كيف يعمل الاتصال
+```bash
+npm install
+npm --prefix backend ci
+npm test
+npm run backend:build
+```
 
-- الواجهة تحتفظ بنسخة محلية في `localStorage` كذاكرة مؤقتة، وSupabase هو **المصدر الأساسي**.
-- الوصول إلى Supabase يتم **حصرياً عبر الخادم/الدوال** باستخدام المفتاح السري؛ المتصفح لا يحمل أي مفتاح Supabase.
-- نقاط النهاية: `GET/PUT/DELETE /api/state` و `POST /api/import` و `GET /api/health`.
+## النشر
 
-## ملاحظات أمنية (للإنتاج)
+يستخدم Vercel `buildCommand` لبناء Backend v1، وتوجه rewrites مسارات `/health` و`/health/deep` و`/api/metrics` إلى تطبيق v1. يجب تطبيق ترحيلات `database/migrations` على Supabase قبل اعتماد المسارات الجديدة في الإنتاج.
 
-- هذا الإعداد يصلح للتشغيل الداخلي/التجريبي. للإنتاج يُفضَّل: مصادقة فعلية عبر Supabase Auth، نموذج علائقي بجداول منفصلة مع RLS لكل دور، وHTTPS (Vercel يوفّر HTTPS تلقائياً).
-- لا ترفع ملف `.env` (يحتوي المفتاح السري) إلى أي مستودع عام.
+## الترحيلات والبيانات
 
-## مرجع v1.1 المعتمد
-
-التنفيذ الجديد لنظام وَصْل يعتمد حصريًا على `docs/wasl-spec-v1.1.md`، وهي نسخة المستند المرفق المعتمد. تم حفظ النسخة السابقة قبل التكامل عبر tag `pre-spec-integration-20261127` والفرع `archive/pre-spec-main`.
-
-الترحيل العلائقي غير التدميري موجود في `database/migrations/017_wasl_v1_1_relational_core.sql`. لا يحذف هذا الترحيل `app_state` ولا أي بيانات طبية؛ بل يضيف نموذج v1.1 وسياسة انتقال موحدة. المسارات القديمة، بما فيها `/api/state`، مجمدة للتوافق ولا يجوز استخدامها كمصدر حقيقة جديد.
+الترحيل `017_wasl_v1_1_relational_core.sql` ينشئ النموذج العلائقي الأساسي دون حذف legacy. الترحيل `018_wasl_v1_1_workflow_hardening.sql` يضيف مصفوفة الانتقالات ومولد الرقم المرجعي ودالة الانتقال الجديدة. ترحيل البيانات من `app_state` إلى الجداول العلائقية عملية مستقلة ولا تحذف المصدر القديم.

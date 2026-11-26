@@ -1,20 +1,27 @@
-name: Security regression tests
+name: Wasl v1.1 regression
 
 on:
   pull_request:
     branches: [main]
   push:
-    branches: [fix/security-hardening-followup-2026-11]
+    branches: [main]
 
 jobs:
-  security:
+  quality:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
           node-version: 20
-      - name: Run repository security scan
+          cache: npm
+      - name: Install root dependencies
+        run: npm install --no-audit --no-fund
+      - name: Install backend dependencies
+        run: npm ci --prefix backend --no-audit --no-fund
+      - name: Typecheck and build Backend v1
+        run: npm run backend:typecheck && npm run backend:build
+      - name: Repository security scan
         run: npm run security:scan
-      - name: Run security regression contracts
+      - name: Security regression contracts
         run: npm run test:security

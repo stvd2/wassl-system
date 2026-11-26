@@ -1,12 +1,15 @@
 {
   "name": "wassl-backend",
-  "version": "1.0.0",
-  "description": "وسيط Node/Express يربط نظام وصل بقاعدة بيانات Supabase",
+  "version": "1.1.0",
+  "private": true,
+  "description": "Wasl v1.1 layered Express backend",
   "type": "module",
-  "main": "server.js",
+  "main": "dist/server.js",
   "scripts": {
-    "start": "node server.js",
-    "dev": "node --watch server.js"
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "start": "node dist/server.js",
+    "dev": "tsx watch src/server.ts"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.45.0",
@@ -14,5 +17,12 @@
     "dotenv": "^16.4.5",
     "express": "^4.19.2",
     "pg": "^8.13.1"
+  },
+  "devDependencies": {
+    "@types/cors": "^2.8.17",
+    "@types/express": "^4.17.21",
+    "@types/node": "^20.17.10",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.2"
   }
 }

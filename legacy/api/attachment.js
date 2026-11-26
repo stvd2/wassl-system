@@ -1,0 +1,278 @@
+'use strict';
+
+const { createClient } = require('@supabase/supabase-js');
+const { requireUser } = require('./_auth');
+const { admin, isMember, uuid } = require('./_conversations');
+
+const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE_KEY, { auth: { persistSession: false } });
+const BUCKET = 'attachments';
+const MAX_BYTES = 15 * 1024 * 1024;
+const MIME_TYPES = new Set(['application/pdf', 'image/jpeg', 'image/png', 'image/webp', 'application/vnd.ms-excel', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', 'text/csv']);
+const ACCEPTANCE_MIME_TYPES = new Set(['application/pdf', 'image/jpeg', 'image/png']);
+const ACCEPTANCE_MAGIC = {
+  'application/pdf': buffer => buffer.subarray(0, 5).toString('ascii') === '%PDF-',
+  'image/jpeg': buffer => buffer.length >= 3 && buffer[0] === 0xff && buffer[1] === 0xd8 && buffer[2] === 0xff,
+  'image/png': buffer => buffer.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]))
+};
+
+function idFrom(req) {
+  const value = String(requestValue(req, 'id') || req.headers['x-attachment-id'] || '').trim();
+  return /^[A-Za-z0-9_-]{1,120}$/.test(value) ? value : '';
+}
+function requestValue(req, key) {
+  const direct = req.query?.[key];
+  if (direct !== undefined && direct !== null && String(direct).trim()) return String(direct).trim();
+  const rawUrl = String(req.url || req.originalUrl || '');
+  try { return new URL(rawUrl, 'http://localhost').searchParams.get(key) || ''; } catch (_) { return ''; }
+}
+function conversationFrom(req) { return uuid(requestValue(req, 'conversation_id') || req.headers['x-conversation-id']); }
+function legacyConversationFrom(value) {
+  const text = String(value || '').trim();
+  return /^C_[A-Za-z0-9_-]{8,120}$/.test(text) ? text : '';
+}
+function messageFrom(req) { return uuid(requestValue(req, 'message_id') || req.headers['x-message-id']); }
+function outgoingContextFrom(req) {
+  const referralId = String(requestValue(req, 'referral_id') || req.headers['x-referral-id'] || '').trim();
+  const category = String(requestValue(req, 'category') || req.headers['x-attachment-category'] || '').trim();
+  if (referralId && !/^[A-Za-z0-9_-]{1,160}$/.test(referralId)) return null;
+  if (category && !/^[A-Za-z0-9_-]{1,80}$/.test(category)) return null;
+  return { referralId, category };
+}
+function originalNameFrom(req, id) { return String(req.query?.name || req.headers['x-original-name'] || id).trim().slice(0, 255) || id; }
+function acceptanceStoragePath(referralId, id) { return `acceptance_letters/${referralId}/${id}`; }
+function referralStoragePath(referralId, id) { return `referrals/${referralId}/${id}`; }
+function matchesMagic(contentType, body) { return ACCEPTANCE_MAGIC[contentType]?.(body) === true; }
+function send(res, status, body, type = 'application/json; charset=utf-8') {
+  res.statusCode = status; res.setHeader('Content-Type', type); res.setHeader('Cache-Control', 'private, no-store'); res.end(body);
+}
+async function readBody(req) {
+  if (Buffer.isBuffer(req.body)) return req.body;
+  if (typeof req.body === 'string') return Buffer.from(req.body);
+  const chunks = []; let total = 0;
+  for await (const chunk of req) { total += chunk.length; if (total > MAX_BYTES) throw Object.assign(new Error('الملف أكبر من 15 م.ب'), { statusCode: 413 }); chunks.push(chunk); }
+  return Buffer.concat(chunks);
+}
+async function readMultipartUpload(req) {
+  const contentType = String(req.headers['content-type'] || '');
+  if (!contentType.toLowerCase().startsWith('multipart/form-data')) return null;
+  const match = contentType.match(/boundary=(?:"([^"]+)"|([^;]+))/i);
+  if (!match) throw Object.assign(new Error('صيغة multipart غير صالحة'), { statusCode: 400 });
+  const boundary = Buffer.from(`--${match[1] || match[2]}`);
+  const raw = await readBody(req);
+  let conversationId = '';
+  let file = null;
+  let cursor = 0;
+  while (cursor < raw.length) {
+    const start = raw.indexOf(boundary, cursor);
+    if (start < 0) break;
+    const partStart = start + boundary.length;
+    if (raw.subarray(partStart, partStart + 2).toString() === '--') break;
+    const headerStart = partStart + (raw.subarray(partStart, partStart + 2).toString() === '\r\n' ? 2 : 0);
+    const headerEnd = raw.indexOf(Buffer.from('\r\n\r\n'), headerStart);
+    if (headerEnd < 0) break;
+    const headers = raw.subarray(headerStart, headerEnd).toString('utf8');
+    const bodyStart = headerEnd + 4;
+    const nextBoundary = raw.indexOf(boundary, bodyStart);
+    if (nextBoundary < 0) break;
+    const bodyEnd = nextBoundary >= 2 && raw.subarray(nextBoundary - 2, nextBoundary).toString() === '\r\n' ? nextBoundary - 2 : nextBoundary;
+    const body = raw.subarray(bodyStart, bodyEnd);
+    const name = headers.match(/name="([^"]+)"/i)?.[1] || '';
+    const partType = headers.match(/\r\ncontent-type:\s*([^\r\n]+)/i)?.[1]?.trim().toLowerCase() || '';
+    if (name === 'conversation_id') conversationId = body.toString('utf8').trim();
+    if (name === 'file') file = { body, contentType: partType || 'application/octet-stream' };
+    cursor = nextBoundary;
+  }
+  return { conversationId, body: file?.body || Buffer.alloc(0), contentType: file?.contentType || 'application/octet-stream' };
+}
+async function attachmentFor(path) {
+  const { data, error } = await admin.from('conversation_attachments').select('id, conversation_id, message_id, owner_id, storage_bucket, storage_path, original_name, mime_type, byte_size, created_at').eq('storage_bucket', BUCKET).eq('storage_path', path).maybeSingle();
+  if (error) throw error;
+  return data || null;
+}
+async function outgoingReferral(referralId) {
+  const { data, error } = await admin.from('app_state').select('data').eq('id', 'main').maybeSingle();
+  if (error) throw error;
+  const referrals = Array.isArray(data?.data?.outgoing_referrals) ? data.data.outgoing_referrals : [];
+  return referrals.find(item => String(item?.id || '') === referralId) || null;
+}
+async function regularReferral(referralId) {
+  const { data, error } = await admin.from('app_state').select('data').eq('id', 'main').maybeSingle();
+  if (error) throw error;
+  const referrals = Array.isArray(data?.data?.referrals) ? data.data.referrals : [];
+  return referrals.find(item => String(item?.id || '') === referralId) || null;
+}
+async function legacyConversationForMember(conversationId, auth) {
+  const { data, error } = await admin.from('app_state').select('data').eq('id', 'main').maybeSingle();
+  if (error) throw error;
+  const state = data?.data || {};
+  const chat = (Array.isArray(state.chats) ? state.chats : []).find(item => String(item?.id || '') === conversationId);
+  if (!chat) return null;
+  const profile = auth.profile || {};
+  const authId = String(auth.authUser?.id || '');
+  const legacyIds = new Set([authId, profile.employee_number, profile.username, profile.full_name].filter(Boolean).map(String));
+  for (const user of (Array.isArray(state.users) ? state.users : [])) {
+    if (String(user?.auth_user_id || '') === authId || String(user?.employee_number || user?.username || '') === String(profile.employee_number || '')) legacyIds.add(String(user.id || ''));
+  }
+  let member = false;
+  if (chat.type === 'direct' || chat.category === 'custom') member = (chat.members || []).some(id => legacyIds.has(String(id)));
+  else if (chat.category === 'all' || chat.category === profile.role) member = true;
+  return member ? chat : null;
+}
+async function handleLegacyConversation(req, res, auth, conversationId, id, multipart) {
+  if (req.method === 'PUT' || req.method === 'POST') {
+    const contentType = String(multipart?.contentType || req.headers['content-type'] || 'application/octet-stream').split(';')[0].toLowerCase();
+    if (!MIME_TYPES.has(contentType)) return send(res, 415, JSON.stringify({ error: 'نوع الملف غير مسموح' }));
+    const body = multipart ? multipart.body : await readBody(req);
+    if (!body.length || body.length > MAX_BYTES) return send(res, 413, JSON.stringify({ error: 'حجم الملف غير صالح' }));
+    const { error } = await supabase.storage.from(BUCKET).upload(id, body, { contentType, upsert: false, cacheControl: '3600' });
+    if (error) throw error;
+    return send(res, 200, JSON.stringify({ ok: true, id, attachment: { id, conversation_id: conversationId, original_name: originalNameFrom(req, id), mime_type: contentType, size: body.length, uploaded_by: auth.authUser.id, uploaded_at: new Date().toISOString() } }));
+  }
+  if (req.method === 'GET') {
+    const { data, error } = await supabase.storage.from(BUCKET).download(id);
+    if (error || !data) return send(res, 404, JSON.stringify({ error: 'المرفق غير موجود' }));
+    const body = Buffer.from(await data.arrayBuffer()); res.statusCode = 200; res.setHeader('Content-Type', data.type || 'application/octet-stream'); res.setHeader('Content-Length', String(body.length)); res.setHeader('Cache-Control', 'private, no-store'); return res.end(body);
+  }
+  if (req.method === 'DELETE') {
+    const { error } = await supabase.storage.from(BUCKET).remove([id]);
+    if (error && !String(error.message || '').toLowerCase().includes('not found')) throw error;
+    return send(res, 200, JSON.stringify({ ok: true, id }));
+  }
+  res.setHeader('Allow', 'GET, PUT, POST, DELETE'); return send(res, 405, JSON.stringify({ error: 'method not allowed' }));
+}
+function canAccessOutgoing(referral, auth) {
+  const role = String(auth.profile?.role || '');
+  if (role === 'admin' || role === 'coordinator') return true;
+  const userId = String(auth.authUser?.id || '');
+  return role === 'doctor' && [referral?.created_by, referral?.doctor_id].map(String).includes(userId);
+}
+function canAccessRegularReferral(referral, auth) {
+  const role = String(auth.profile?.role || '');
+  if (['admin', 'coordinator', 'beds'].includes(role)) return true;
+  if (role !== 'doctor') return false;
+  const userId = String(auth.authUser?.id || '');
+  if ([referral?.created_by, referral?.assigned_doctor_id].map(String).includes(userId)) return true;
+  const department = String(auth.profile?.department || '');
+  return Boolean(department && [referral?.target_specialty, referral?.specialty].map(String).includes(department));
+}
+function referralMagicMatches(contentType, body) {
+  if (contentType === 'application/pdf') return ACCEPTANCE_MAGIC['application/pdf'](body);
+  if (contentType === 'image/jpeg') return ACCEPTANCE_MAGIC['image/jpeg'](body);
+  if (contentType === 'image/png') return ACCEPTANCE_MAGIC['image/png'](body);
+  return contentType === 'image/webp' && body.length >= 12 && body.subarray(0, 4).toString('ascii') === 'RIFF' && body.subarray(8, 12).toString('ascii') === 'WEBP';
+}
+async function handleRegularReferral(req, res, auth, context, id) {
+  if (context.category !== 'referral_attachment' || !context.referralId) return send(res, 400, JSON.stringify({ error: 'مرفق الإحالة يتطلب referral_id وcategory=referral_attachment' }));
+  const referral = await regularReferral(context.referralId);
+  if (!referral) return send(res, 404, JSON.stringify({ error: 'الإحالة غير موجودة' }));
+  if (!canAccessRegularReferral(referral, auth)) return send(res, 403, JSON.stringify({ error: 'لا تملك صلاحية هذه الإحالة' }));
+  const storagePath = referralStoragePath(context.referralId, id);
+  if (req.method === 'PUT' || req.method === 'POST') {
+    const role = String(auth.profile?.role || '');
+    const userId = String(auth.authUser?.id || '');
+    if (role === 'doctor' && String(referral.created_by || '') !== userId) return send(res, 403, JSON.stringify({ error: 'رفع مرفق الإحالة متاح لمنشئها فقط للطبيب' }));
+    const contentType = String(req.headers['content-type'] || 'application/octet-stream').split(';')[0].toLowerCase();
+    if (!['application/pdf', 'image/jpeg', 'image/png', 'image/webp'].includes(contentType)) return send(res, 415, JSON.stringify({ error: 'نوع مرفق الإحالة غير مسموح' }));
+    const body = await readBody(req);
+    if (!body.length || body.length > MAX_BYTES) return send(res, 413, JSON.stringify({ error: 'حجم الملف غير صالح' }));
+    if (!referralMagicMatches(contentType, body)) return send(res, 415, JSON.stringify({ error: 'محتوى الملف لا يطابق نوعه المعلن' }));
+    const { error } = await supabase.storage.from(BUCKET).upload(storagePath, body, { contentType, upsert: false, cacheControl: '3600' });
+    if (error) {
+      if (String(error.message || '').toLowerCase().includes('already exists')) return send(res, 409, JSON.stringify({ error: 'مرفق الإحالة موجود مسبقاً' }));
+      throw error;
+    }
+    return send(res, 200, JSON.stringify({ ok: true, id, attachment: { id, category: 'referral_attachment', referral_id: context.referralId, original_name: originalNameFrom(req, id), mime_type: contentType, size: body.length, uploaded_by: auth.authUser.id, uploaded_at: new Date().toISOString() } }));
+  }
+  if (req.method === 'GET') {
+    const { data, error } = await supabase.storage.from(BUCKET).download(storagePath);
+    if (error || !data) return send(res, 404, JSON.stringify({ error: 'مرفق الإحالة غير موجود' }));
+    const buf = Buffer.from(await data.arrayBuffer()); res.statusCode = 200; res.setHeader('Content-Type', data.type || 'application/octet-stream'); res.setHeader('Content-Length', String(buf.length)); res.setHeader('Cache-Control', 'private, no-store'); return res.end(buf);
+  }
+  if (req.method === 'DELETE') {
+    const { error } = await supabase.storage.from(BUCKET).remove([storagePath]);
+    if (error && !String(error.message || '').toLowerCase().includes('not found')) throw error;
+    return send(res, 200, JSON.stringify({ ok: true, id, category: 'referral_attachment' }));
+  }
+  res.setHeader('Allow', 'GET, PUT, POST, DELETE'); return send(res, 405, JSON.stringify({ error: 'method not allowed' }));
+}
+
+async function handleOutgoing(req, res, auth, context, id) {
+  if (context.category !== 'acceptance_letter' || !context.referralId) return send(res, 400, JSON.stringify({ error: 'خطاب القبول يتطلب referral_id وcategory=acceptance_letter' }));
+  const referral = await outgoingReferral(context.referralId);
+  if (!referral) return send(res, 404, JSON.stringify({ error: 'الإحالة الصادرة غير موجودة' }));
+  const role = String(auth.profile?.role || '');
+  const linkedId = String(referral.acceptance_letter_attachment_id || '');
+  const storagePath = acceptanceStoragePath(context.referralId, id);
+  if (req.method === 'PUT' || req.method === 'POST') {
+    if (!['coordinator', 'admin'].includes(role)) return send(res, 403, JSON.stringify({ error: 'رفع خطاب القبول متاح للمنسق أو المدير فقط' }));
+    if (linkedId && linkedId !== id) return send(res, 409, JSON.stringify({ error: 'للإحالة خطاب قبول مرتبط مسبقاً؛ حدّث السجل أولاً' }));
+    const contentType = String(req.headers['content-type'] || 'application/octet-stream').split(';')[0].toLowerCase();
+    if (!ACCEPTANCE_MIME_TYPES.has(contentType)) return send(res, 415, JSON.stringify({ error: 'نوع خطاب القبول غير مسموح' }));
+    if (await attachmentFor(id)) return send(res, 409, JSON.stringify({ error: 'معرّف المرفق مستخدم في مرفق محادثة' }));
+    const body = await readBody(req);
+    if (!body.length || body.length > MAX_BYTES) return send(res, 413, JSON.stringify({ error: 'حجم الملف غير صالح' }));
+    if (!matchesMagic(contentType, body)) return send(res, 415, JSON.stringify({ error: 'محتوى الملف لا يطابق نوعه المعلن' }));
+    const { error } = await supabase.storage.from(BUCKET).upload(storagePath, body, { contentType, upsert: true, cacheControl: '3600' });
+    if (error) throw error;
+    return send(res, 200, JSON.stringify({ ok: true, id, attachment: { id, category: 'acceptance_letter', referral_id: context.referralId, original_name: originalNameFrom(req, id), mime_type: contentType, size: body.length, uploaded_by: auth.authUser.id, uploaded_at: new Date().toISOString() } }));
+  }
+  if (!canAccessOutgoing(referral, auth)) return send(res, 403, JSON.stringify({ error: 'لا تملك صلاحية هذه الإحالة' }));
+  if (req.method === 'GET') {
+    if (linkedId !== id) return send(res, 404, JSON.stringify({ error: 'خطاب القبول غير مرتبط بهذه الإحالة' }));
+    const { data, error } = await supabase.storage.from(BUCKET).download(storagePath);
+    if (error || !data) return send(res, 404, JSON.stringify({ error: 'المرفق غير موجود' }));
+    const buf = Buffer.from(await data.arrayBuffer()); res.statusCode = 200; res.setHeader('Content-Type', data.type || 'application/octet-stream'); res.setHeader('Content-Length', String(buf.length)); res.setHeader('Cache-Control', 'private, no-store'); return res.end(buf);
+  }
+  if (req.method === 'DELETE') return send(res, 409, JSON.stringify({ error: 'أزل ارتباط الخطاب من الإحالة عبر /api/state قبل حذف الملف' }));
+  res.setHeader('Allow', 'GET, PUT, POST, DELETE'); return send(res, 405, JSON.stringify({ error: 'method not allowed' }));
+}
+
+module.exports = async function handler(req, res) {
+  const id = idFrom(req); if (!id) return send(res, 400, JSON.stringify({ error: 'معرّف المرفق غير صالح' }));
+  const path = id;
+  try {
+    const auth = await requireUser(req, { roles: ['admin', 'coordinator', 'doctor', 'beds'] });
+    if (!auth.ok) return send(res, auth.status, JSON.stringify({ error: auth.error }));
+    const multipart = (req.method === 'PUT' || req.method === 'POST') ? await readMultipartUpload(req) : null;
+    const rawConversationId = requestValue(req, 'conversation_id') || req.headers['x-conversation-id'] || multipart?.conversationId;
+    const conversationId = uuid(rawConversationId);
+    const legacyConversationId = legacyConversationFrom(rawConversationId);
+    const outgoing = outgoingContextFrom(req); if (!outgoing) return send(res, 400, JSON.stringify({ error: 'سياق المرفق غير صالح' }));
+    if (outgoing.category === 'acceptance_letter') return handleOutgoing(req, res, auth, outgoing, id);
+    if (outgoing.category === 'referral_attachment') return handleRegularReferral(req, res, auth, outgoing, id);
+    if (outgoing.category) return send(res, 400, JSON.stringify({ error: 'فئة المرفق غير معروفة' }));
+    if (legacyConversationId) {
+      if (!(await legacyConversationForMember(legacyConversationId, auth))) return send(res, 403, JSON.stringify({ error: 'لا تملك عضوية هذه المحادثة' }));
+      return handleLegacyConversation(req, res, auth, legacyConversationId, id, multipart);
+    }
+    if (!conversationId) return send(res, 400, JSON.stringify({ error: 'conversation_id مطلوب للتحقق من عضوية المرفق' }));
+    if (!(await isMember(conversationId, auth.authUser.id))) return send(res, 403, JSON.stringify({ error: 'لا تملك عضوية هذه المحادثة' }));
+    let record = await attachmentFor(path);
+    if (record && record.conversation_id !== conversationId) return send(res, 403, JSON.stringify({ error: 'المرفق مرتبط بمحادثة أخرى' }));
+    if (req.method === 'PUT' || req.method === 'POST') {
+      const contentType = String(multipart?.contentType || req.headers['content-type'] || 'application/octet-stream').split(';')[0].toLowerCase();
+      if (!MIME_TYPES.has(contentType)) return send(res, 415, JSON.stringify({ error: 'نوع الملف غير مسموح' }));
+      const body = multipart ? multipart.body : await readBody(req); if (!body.length || body.length > MAX_BYTES) return send(res, 413, JSON.stringify({ error: 'حجم الملف غير صالح' }));
+      if (record && record.owner_id !== auth.authUser.id && auth.profile.role !== 'admin') return send(res, 403, JSON.stringify({ error: 'لا تملك المرفق' }));
+      const { error: uploadError } = await supabase.storage.from(BUCKET).upload(path, body, { contentType, upsert: true, cacheControl: '3600' }); if (uploadError) throw uploadError;
+      const values = { conversation_id: conversationId, message_id: messageFrom(req) || null, owner_id: record?.owner_id || auth.authUser.id, storage_bucket: BUCKET, storage_path: path, original_name: originalNameFrom(req, id), mime_type: contentType, byte_size: body.length };
+      const { data: saved, error: metadataError } = await admin.from('conversation_attachments').upsert(values, { onConflict: 'storage_bucket,storage_path' }).select('id, conversation_id, message_id, owner_id, storage_bucket, storage_path, original_name, mime_type, byte_size, created_at').single();
+      if (metadataError) { await supabase.storage.from(BUCKET).remove([path]); throw metadataError; }
+      return send(res, 200, JSON.stringify({ ok: true, id, attachment: saved }));
+    }
+    if (req.method === 'GET') {
+      if (!record || record.conversation_id !== conversationId) return send(res, 404, JSON.stringify({ error: 'بيانات المرفق غير موجودة' }));
+      const { data, error } = await supabase.storage.from(BUCKET).download(path); if (error || !data) return send(res, 404, JSON.stringify({ error: 'المرفق غير موجود' }));
+      const buf = Buffer.from(await data.arrayBuffer()); res.statusCode = 200; res.setHeader('Content-Type', record.mime_type || data.type || 'application/octet-stream'); res.setHeader('Content-Length', String(buf.length)); res.setHeader('Cache-Control', 'private, no-store'); return res.end(buf);
+    }
+    if (req.method === 'DELETE') {
+      if (!record) return send(res, 404, JSON.stringify({ error: 'المرفق غير موجود' }));
+      if (record.owner_id !== auth.authUser.id && auth.profile.role !== 'admin') return send(res, 403, JSON.stringify({ error: 'لا تملك المرفق' }));
+      const { error: storageError } = await supabase.storage.from(BUCKET).remove([path]); if (storageError) throw storageError;
+      const { error: metadataError } = await admin.from('conversation_attachments').delete().eq('id', record.id); if (metadataError) throw metadataError;
+      return send(res, 200, JSON.stringify({ ok: true, id }));
+    }
+    res.setHeader('Allow', 'GET, PUT, POST, DELETE'); return send(res, 405, JSON.stringify({ error: 'method not allowed' }));
+  } catch (error) { console.error('[WASL] /api/attachment:', error.message); return send(res, error.statusCode || 500, JSON.stringify({ error: 'فشل تخزين المرفق' })); }
+};
+module.exports.config = { api: { bodyParser: false } };

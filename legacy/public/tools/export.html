@@ -1,0 +1,82 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>تصدير / ترحيل بيانات وَصْل</title>
+<style>
+  body { font-family: system-ui, "Segoe UI", Tahoma, sans-serif; background:#f4f7f9; color:#1f2937; margin:0; padding:32px; line-height:1.7; }
+  .wrap { max-width:640px; margin:0 auto; background:#fff; border-radius:16px; padding:28px; box-shadow:0 4px 20px rgba(0,0,0,.08); }
+  h1 { margin:0 0 8px; font-size:22px; }
+  p  { color:#4b5563; margin:0 0 20px; }
+  button { display:block; width:100%; padding:13px; margin:10px 0; border:0; border-radius:10px; font-size:15px; cursor:pointer; font-weight:700; }
+  .b1 { background:#0f766e; color:#fff; }
+  .b2 { background:#1d4ed8; color:#fff; }
+  input { width:100%; box-sizing:border-box; padding:11px; margin-top:14px; border:1px solid #d1d5db; border-radius:10px; font-size:14px; }
+  #status { margin-top:16px; padding:12px; border-radius:10px; background:#f8fafc; border:1px solid #e5e7eb; white-space:pre-wrap; }
+  code { background:#eef2f7; padding:2px 6px; border-radius:6px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>📦 تصدير / ترحيل بيانات وَصْل</h1>
+  <p>تقرأ هذه الأداة بيانات النظام الحالية من <code>localStorage</code> (المفتاح <code>wasl_v6</code>)، ثم تتيح تنزيلها كملف JSON أو إرسالها مباشرة إلى الخادم (Supabase).</p>
+  <p style="font-size:13px;color:#6b7280">ملاحظة: لكي تعمل من نفس أصل التطبيق، افتحها عبر الخادم على <code>http://localhost:3001/tools/export.html</code>.</p>
+
+  <button class="b1" onclick="downloadJson()">⬇ تنزيل البيانات كـ JSON</button>
+  <button class="b2" onclick="sendToBackend()">📤 إرسال البيانات إلى الخادم (Supabase)</button>
+
+  <input id="apiBase" value="" placeholder="اتركه فارغاً للاستخدام من نفس الأصل">
+
+  <div id="status">—</div>
+</div>
+
+<script>
+  const KEY = 'wasl_v6';
+
+  function readData() {
+    try {
+      const raw = localStorage.getItem(KEY);
+      return raw ? JSON.parse(raw) : null;
+    } catch (e) { return null; }
+  }
+
+  function setStatus(msg, ok) {
+    const el = document.getElementById('status');
+    el.textContent = msg;
+    el.style.background = ok === true ? '#ecfdf5' : (ok === false ? '#fef2f2' : '#f8fafc');
+    el.style.borderColor = ok === true ? '#a7f3d0' : (ok === false ? '#fecaca' : '#e5e7eb');
+  }
+
+  function downloadJson() {
+    const d = readData();
+    if (!d) return setStatus('لا توجد بيانات في localStorage (' + KEY + '). تأكد أنك فتحت الأداة من نفس أصل التطبيق.', false);
+    const blob = new Blob([JSON.stringify(d, null, 2)], { type: 'application/json' });
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = 'wassl-data-' + new Date().toISOString().slice(0, 10) + '.json';
+    a.click();
+    setStatus('✓ تم تجهيز ملف JSON للتنزيل (' + d.referrals.length + ' إحالة، ' + d.users.length + ' مستخدم).', true);
+  }
+
+  async function sendToBackend() {
+    const d = readData();
+    if (!d) return setStatus('لا توجد بيانات في localStorage.', false);
+    const base = document.getElementById('apiBase').value.replace(/\/$/, '');
+    setStatus('⏳ جارٍ الإرسال...', null);
+    try {
+      const res = await fetch(base + '/api/import', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(d)
+      });
+      const j = await res.json();
+      if (res.ok) setStatus('✓ تم الإرسال والحفظ في Supabase بنجاح.', true);
+      else setStatus('✕ فشل: ' + JSON.stringify(j), false);
+    } catch (e) {
+      setStatus('✕ خطأ في الاتصال بالخادم (' + base + '): ' + e.message, false);
+    }
+  }
+</script>
+</body>
+</html>

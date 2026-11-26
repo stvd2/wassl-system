@@ -1,31 +1,22 @@
 {
+  "buildCommand": "npm install --no-audit --no-fund && npm --prefix backend ci --no-audit --no-fund && npm --prefix backend run build",
+  "rewrites": [
+    { "source": "/health", "destination": "/api/v1/health" },
+    { "source": "/health/deep", "destination": "/api/v1/health/deep" },
+    { "source": "/api/metrics", "destination": "/api/v1/metrics" }
+  ],
   "headers": [
     {
       "source": "/",
-      "headers": [
-        {
-          "key": "Cache-Control",
-          "value": "no-store, max-age=0, must-revalidate"
-        }
-      ]
+      "headers": [{ "key": "Cache-Control", "value": "no-store, max-age=0, must-revalidate" }]
     },
     {
       "source": "/api/(.*)",
-      "headers": [
-        {
-          "key": "Cache-Control",
-          "value": "no-store, max-age=0, must-revalidate"
-        }
-      ]
+      "headers": [{ "key": "Cache-Control", "value": "no-store, max-age=0, must-revalidate" }]
     },
     {
       "source": "/shift-import/(.*)",
-      "headers": [
-        {
-          "key": "Cache-Control",
-          "value": "no-store, max-age=0, must-revalidate"
-        }
-      ]
+      "headers": [{ "key": "Cache-Control", "value": "no-store, max-age=0, must-revalidate" }]
     }
   ]
 }
