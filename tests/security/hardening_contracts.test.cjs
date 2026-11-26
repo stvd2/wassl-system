@@ -43,12 +43,17 @@ test('approval endpoint stays compatible while sharing the registration Vercel f
 });
 
 test('Vercel adapter invokes the Express app with Node request and response objects', () => {
-  const adapter = read('api/v1/[...path].js');
-  assert.match(adapter, /import\('\.\.\/\.\.\/backend\/dist\/app\.js'\)/);
+  const adapter = read('api/v1.js');
+  assert.match(adapter, /import\('\.\.\/backend\/dist\/app\.js'\)/);
   assert.match(adapter, /createApp\(\)/);
+  assert.match(adapter, /searchParams\.get\('__route'\)/);
+  assert.match(adapter, /req\.url = `\/api\/v1/);
   assert.match(adapter, /\(await getApp\(\)\)\(req, res\)/);
   assert.doesNotMatch(adapter, /serverless-http/);
-  assert.equal(fs.existsSync(path.join(root, 'api/v1/[[...path]].js')), false);
+  const config = JSON.parse(read('vercel.json'));
+  assert.ok(config.rewrites.some(rule => rule.source === '/api/v1/:path*' && rule.destination === '/api/v1?__route=:path*'));
+  assert.equal(fs.existsSync(path.join(root, 'api/v1.js')), true);
+  assert.equal(fs.existsSync(path.join(root, 'api/v1/[...path].js')), false);
 });
 
 test('Express app supports the public health aliases used by Vercel rewrites', () => {
