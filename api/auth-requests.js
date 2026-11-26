@@ -1,6 +1,7 @@
 'use strict';
 const crypto = require('node:crypto');
 const { admin, requireUser } = require('./_auth');
+const approveHandler = require('./_auth-requests-approve');
 
 const json = (res, status, body) => { res.setHeader('Cache-Control', 'no-store'); return res.status(status).json(body); };
 const normalizeMobile = v => String(v || '').replace(/[\s-]/g, '');
@@ -9,6 +10,7 @@ const validMobile = v => /^05\d{8}$/.test(v);
 function trackingNo() { return `REQ-${new Date().getFullYear()}-${crypto.randomBytes(4).toString('hex').toUpperCase()}`; }
 function publicRequest(row) { return { id: row.id, tracking_no: row.tracking_no, employee_number: row.employee_number, full_name: row.full_name, mobile: row.mobile, status: row.status, rejection_reason: row.rejection_reason, created_at: row.created_at, reviewed_at: row.reviewed_at }; }
 module.exports = async function handler(req, res) {
+  if (req.query?.action === 'approve') return approveHandler(req, res);
   try {
     if (req.method === 'POST') {
       const b = req.body || {};

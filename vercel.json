@@ -1,6 +1,7 @@
 {
   "buildCommand": "npm install --no-audit --no-fund && npm --prefix backend ci --no-audit --no-fund && npm --prefix backend run build",
   "rewrites": [
+    { "source": "/api/auth-requests-approve", "destination": "/api/auth-requests?action=approve" },
     { "source": "/health", "destination": "/api/v1/health" },
     { "source": "/health/deep", "destination": "/api/v1/health/deep" },
     { "source": "/api/metrics", "destination": "/api/v1/metrics" }

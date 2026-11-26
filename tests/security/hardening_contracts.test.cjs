@@ -34,8 +34,16 @@ test('rate-limit cleanup keeps a one-day minimum retention and service-role-only
   assert.match(migration, /revoke all on function public\.wasl_cleanup_rate_limits\(integer\)[\s\S]*to service_role/);
 });
 
+test('approval endpoint stays compatible while sharing the registration Vercel function', () => {
+  const handler = read('api/auth-requests.js');
+  const config = JSON.parse(read('vercel.json'));
+  assert.match(handler, /req\.query\?\.action === 'approve'/);
+  assert.ok(config.rewrites.some(rule => rule.source === '/api/auth-requests-approve' && rule.destination === '/api/auth-requests?action=approve'));
+  assert.equal(fs.existsSync(path.join(root, 'api/auth-requests-approve.js')), false);
+});
+
 test('approval uses a compare-and-set claim and only approves a claimed request', () => {
-  const source = read('api/auth-requests-approve.js');
+  const source = read('api/_auth-requests-approve.js');
   const migration = read('database/005_atomic_registration_and_conversations.sql');
   assert.match(migration, /'pending','processing','approved','rejected'/);
   assert.match(source, /eq\('status', 'pending'\)\.select\('id'\)/);
@@ -45,7 +53,7 @@ test('approval uses a compare-and-set claim and only approves a claimed request'
 });
 
 test('approval never changes an existing Auth password during conflict handling', () => {
-  const source = read('api/auth-requests-approve.js');
+  const source = read('api/_auth-requests-approve.js');
   assert.match(source, /if \(authUser\)[\s\S]*?return json\(res, 409/);
   assert.doesNotMatch(source, /updateUserById/);
 });
