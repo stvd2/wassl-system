@@ -42,6 +42,14 @@ test('approval endpoint stays compatible while sharing the registration Vercel f
   assert.equal(fs.existsSync(path.join(root, 'api/auth-requests-approve.js')), false);
 });
 
+test('Vercel adapter invokes the Express app with Node request and response objects', () => {
+  const adapter = read('api/v1/[[...path]].js');
+  assert.match(adapter, /import\('\.\.\/\.\.\/backend\/dist\/app\.js'\)/);
+  assert.match(adapter, /createApp\(\)/);
+  assert.match(adapter, /\(await getApp\(\)\)\(req, res\)/);
+  assert.doesNotMatch(adapter, /serverless-http/);
+});
+
 test('approval uses a compare-and-set claim and only approves a claimed request', () => {
   const source = read('api/_auth-requests-approve.js');
   const migration = read('database/005_atomic_registration_and_conversations.sql');
