@@ -50,6 +50,12 @@ test('Vercel adapter invokes the Express app with Node request and response obje
   assert.doesNotMatch(adapter, /serverless-http/);
 });
 
+test('Express app supports the public health aliases used by Vercel rewrites', () => {
+  const app = read('backend/src/app.ts');
+  assert.match(app, /app\.use\('\/api', healthRouter\)/);
+  assert.match(app, /app\.use\('\/', healthRouter\)/);
+});
+
 test('approval uses a compare-and-set claim and only approves a claimed request', () => {
   const source = read('api/_auth-requests-approve.js');
   const migration = read('database/005_atomic_registration_and_conversations.sql');
