@@ -49,7 +49,11 @@ npm run backend:build
 
 ## النشر
 
-يستخدم Vercel `buildCommand` لبناء Backend v1، وتوجه rewrites مسارات `/health` و`/health/deep` و`/api/metrics` إلى تطبيق v1. يجب تطبيق ترحيلات `database/migrations` على Supabase قبل اعتماد المسارات الجديدة في الإنتاج.
+يستخدم Vercel `buildCommand` لبناء Backend v1، وتوجه rewrites مسارات `/health` و`/health/deep` و`/api/metrics` إلى تطبيق v1. يحدد `engines.node` إصدار Node.js 24.x المدعوم للبناء والدوال. يجب تطبيق ترحيلات `database/migrations` على Supabase قبل اعتماد المسارات الجديدة في الإنتاج.
+
+## تشغيل Backend v1 باستخدام Docker
+
+يوفر `docker compose up --build` حاوية مستقلة لـ Backend v1 تتصل بمشروع Supabase موجود. لا يشغّل Compose قاعدة بيانات محلية أو ترحيلات تلقائية، ولا يستبدل نشر الواجهة ومسارات Vercel الحالية. راجع [دليل Docker](docs/docker.md) للمتطلبات وحدود التشغيل.
 
 ## الترحيلات والبيانات
 

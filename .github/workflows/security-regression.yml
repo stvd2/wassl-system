@@ -1,4 +1,4 @@
-name: Wasl v1.1 regression
+name: Wasl CI
 
 on:
   pull_request:
@@ -9,19 +9,33 @@ on:
 jobs:
   quality:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 24
           cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            backend/package-lock.json
       - name: Install root dependencies
-        run: npm install --no-audit --no-fund
+        run: npm ci --no-audit --no-fund
       - name: Install backend dependencies
         run: npm ci --prefix backend --no-audit --no-fund
-      - name: Typecheck and build Backend v1
-        run: npm run backend:typecheck && npm run backend:build
+      - name: Unit and security tests
+        run: npm test
+      - name: Integration and frontend contract tests
+        run: node --test tests/integration/*.test.cjs tests/i18n_contract.test.cjs tests/shift-import/import.test.cjs
       - name: Repository security scan
         run: npm run security:scan
-      - name: Security regression contracts
-        run: npm run test:security
+      - name: Build Backend v1
+        run: npm run backend:build
+      - name: Validate Compose configuration
+        env:
+          SUPABASE_URL: https://example.supabase.co
+          SUPABASE_SERVICE_ROLE_KEY: ci-placeholder
+        run: docker compose config --quiet
+      - name: Build Docker image
+        run: docker build --tag wassl-backend:ci --file backend/Dockerfile backend
