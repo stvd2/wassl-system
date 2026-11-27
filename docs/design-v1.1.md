@@ -275,14 +275,13 @@ CREATE TABLE IF NOT EXISTS public.idempotency_keys (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   user_id UUID NOT NULL REFERENCES public.users(id),
   endpoint VARCHAR(200) NOT NULL,
+  idempotency_key VARCHAR(255) NOT NULL,
   request_hash VARCHAR(64) NOT NULL,
   response_snapshot JSONB,
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   expires_at TIMESTAMPTZ NOT NULL,
   CONSTRAINT idempotency_unique UNIQUE (user_id, endpoint, idempotency_key)
 );
--- ملاحظة: idempotency_key يُضاف كعمود منفصل
-ALTER TABLE public.idempotency_keys ADD COLUMN IF NOT EXISTS idempotency_key VARCHAR(255) NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_idempotency_lookup ON public.idempotency_keys(user_id, endpoint, idempotency_key);
 CREATE INDEX IF NOT EXISTS idx_idempotency_expiry ON public.idempotency_keys(expires_at);
 -- <<< WASL-MIGRATION-END
