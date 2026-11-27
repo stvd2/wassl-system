@@ -572,3 +572,7 @@ Supabase Realtime: https://supabase.com/docs/guides/realtime
 Supabase Storage RLS: https://supabase.com/docs/guides/storage/security/access-control
 
 Vercel Functions limits: https://vercel.com/docs/functions/limitations
+
+---
+
+**نهاية الملف.**
