@@ -256,6 +256,64 @@ ALTER TABLE public.referral_attachments ADD COLUMN scanned_at TIMESTAMPTZ;
 ALTER TABLE public.referral_attachments ADD COLUMN deleted_at TIMESTAMPTZ;
 ALTER TABLE public.referral_attachments ADD COLUMN deleted_by UUID REFERENCES public.users(id);
 -- <<< WASL-MIGRATION-END
+
+-- >>> WASL-MIGRATION-BEGIN: conversation_members
+CREATE TABLE IF NOT EXISTS public.conversation_members (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  conversation_id UUID NOT NULL REFERENCES public.conversations(id) ON DELETE CASCADE,
+  user_id UUID NOT NULL REFERENCES public.users(id) ON DELETE CASCADE,
+  joined_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  left_at TIMESTAMPTZ,
+  CONSTRAINT conversation_members_unique UNIQUE (conversation_id, user_id)
+);
+CREATE INDEX IF NOT EXISTS idx_conv_members_conv ON public.conversation_members(conversation_id);
+CREATE INDEX IF NOT EXISTS idx_conv_members_user ON public.conversation_members(user_id);
+-- <<< WASL-MIGRATION-END
+
+-- >>> WASL-MIGRATION-BEGIN: idempotency_keys
+CREATE TABLE IF NOT EXISTS public.idempotency_keys (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id UUID NOT NULL REFERENCES public.users(id),
+  endpoint VARCHAR(200) NOT NULL,
+  request_hash VARCHAR(64) NOT NULL,
+  response_snapshot JSONB,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  expires_at TIMESTAMPTZ NOT NULL,
+  CONSTRAINT idempotency_unique UNIQUE (user_id, endpoint, idempotency_key)
+);
+-- ملاحظة: idempotency_key يُضاف كعمود منفصل
+ALTER TABLE public.idempotency_keys ADD COLUMN IF NOT EXISTS idempotency_key VARCHAR(255) NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_idempotency_lookup ON public.idempotency_keys(user_id, endpoint, idempotency_key);
+CREATE INDEX IF NOT EXISTS idx_idempotency_expiry ON public.idempotency_keys(expires_at);
+-- <<< WASL-MIGRATION-END
+
+-- >>> WASL-MIGRATION-BEGIN: notifications_outbox
+CREATE TABLE IF NOT EXISTS public.notifications_outbox (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id UUID REFERENCES public.users(id),
+  type VARCHAR(50) NOT NULL,
+  payload JSONB NOT NULL DEFAULT '{}',
+  status VARCHAR(20) NOT NULL DEFAULT 'pending' CHECK (status IN ('pending','sent','failed')),
+  attempts INTEGER NOT NULL DEFAULT 0,
+  next_retry_at TIMESTAMPTZ,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_outbox_pending ON public.notifications_outbox(status, next_retry_at) WHERE status = 'pending';
+-- <<< WASL-MIGRATION-END
+
+-- >>> WASL-MIGRATION-BEGIN: auth_events
+CREATE TABLE IF NOT EXISTS public.auth_events (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id UUID REFERENCES public.users(id),
+  event_type VARCHAR(50) NOT NULL CHECK (event_type IN ('login','logout','failed_login','password_change','role_change')),
+  ip_address INET,
+  user_agent TEXT,
+  details JSONB NOT NULL DEFAULT '{}',
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_auth_events_user ON public.auth_events(user_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_auth_events_type ON public.auth_events(event_type, created_at DESC);
+-- <<< WASL-MIGRATION-END
 G. notifications — الإشعارات
 (بدون تغيير عن v1.0)
 
