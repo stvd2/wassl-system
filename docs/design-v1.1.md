@@ -39,213 +39,32 @@
 
 ## 3. مخطط قاعدة البيانات ERD — v1.1
 
-### 3.1 مخطط العلاقات (Mermaid)
+### 3.1 مخطط العلاقات (نصي)
 
-```mermaid
-erDiagram
-    USERS ||--o{ REFERRALS : creates
-    USERS ||--o{ REFERRAL_EVENTS : performs
-    USERS ||--o{ REFERRAL_ATTACHMENTS : uploads
-    USERS ||--o{ NOTIFICATIONS : receives
-    USERS ||--o{ SHIFTS : assigned
-    USERS ||--o{ AUDIT_LOGS : generates
-    USERS ||--o{ AUTH_EVENTS : generates
-    USERS ||--o{ CONVERSATION_MEMBERS : joins
+USERS (id) ───< REFERRALS (created_by)
+USERS (id) ───< REFERRAL_EVENTS (actor_id)
+USERS (id) ───< REFERRAL_ATTACHMENTS (uploaded_by)
+USERS (id) ───< NOTIFICATIONS (user_id)
+USERS (id) ───< SHIFTS (user_id)
+USERS (id) ───< AUDIT_LOGS (actor_id)
+USERS (id) ───< AUTH_EVENTS (user_id)
+USERS (id) ───< CONVERSATION_MEMBERS (user_id)
 
-    REFERRALS ||--o{ REFERRAL_EVENTS : has
-    REFERRALS ||--o{ REFERRAL_ATTACHMENTS : contains
-    REFERRALS ||--o{ REFERRAL_CONSULTATIONS : requests
-    REFERRALS ||--o{ BED_REQUESTS : requests
-    REFERRALS ||--o{ CONVERSATIONS : relates_to
-    REFERRALS }o--|| REFERRAL_CONSULTATIONS : latest
+REFERRALS (id) ───< REFERRAL_EVENTS (referral_id)
+REFERRALS (id) ───< REFERRAL_ATTACHMENTS (referral_id)
+REFERRALS (id) ───< REFERRAL_CONSULTATIONS (referral_id)
+REFERRALS (id) ───< BED_REQUESTS (referral_id)
+REFERRALS (id) ───< CONVERSATIONS (referral_id)
+REFERRALS (latest_consultation_id) ───> REFERRAL_CONSULTATIONS (id)
 
-    DEPARTMENTS ||--o{ REFERRAL_CONSULTATIONS : handles
-    DEPARTMENTS ||--o{ USERS : contains
+DEPARTMENTS (id) ───< REFERRAL_CONSULTATIONS (department_id)
+DEPARTMENTS (id) ───< USERS (department_id)
 
-    BEDS ||--o{ BED_REQUESTS : assigned_to
+BEDS (id) ───< BED_REQUESTS (bed_id)
 
-    CONVERSATIONS ||--o{ MESSAGES : contains
-    CONVERSATIONS ||--o{ CONVERSATION_MEMBERS : has
+CONVERSATIONS (id) ───< MESSAGES (conversation_id)
+CONVERSATIONS (id) ───< CONVERSATION_MEMBERS (conversation_id)
 
-    USERS {
-        uuid id PK
-        string username UK
-        string full_name
-        string employee_no UK
-        string role
-        string status "pending|active|rejected|disabled"
-        uuid department_id FK
-        uuid auth_user_id
-        timestamp created_at
-        timestamp updated_at
-    }
-
-    REFERRALS {
-        uuid id PK
-        string ref_no UK
-        string patient_name
-        string patient_identifier
-        string priority
-        string admission_type
-        uuid department_id FK
-        string status
-        uuid created_by FK
-        uuid assigned_doctor_id FK
-        uuid latest_consultation_id FK
-        integer version "NEW in v1.1"
-        timestamp created_at
-        timestamp updated_at
-        timestamp completed_at
-        timestamp archived_at "NEW in v1.1"
-        uuid archived_by FK
-        text archive_reason
-    }
-
-    REFERRAL_EVENTS {
-        uuid id PK
-        uuid referral_id FK
-        uuid actor_id FK
-        string from_status
-        string to_status
-        string action
-        text notes
-        jsonb details
-        timestamp created_at
-    }
-
-    REFERRAL_CONSULTATIONS {
-        uuid id PK
-        uuid referral_id FK
-        uuid department_id FK
-        string status
-        text opinion
-        text recommendations
-        text followup
-        uuid responded_by FK
-        timestamp responded_at
-    }
-
-    BEDS {
-        uuid id PK
-        string number
-        string type
-        string ward
-        string status "available|reserved|occupied|maintenance|inactive"
-        timestamp created_at
-        timestamp updated_at
-    }
-
-    BED_REQUESTS {
-        uuid id PK
-        uuid referral_id FK
-        uuid bed_id FK
-        string status
-        text decision_reason
-        uuid requested_by FK
-        uuid decided_by FK
-        integer version
-        timestamp requested_at
-        timestamp decided_at
-    }
-
-    REFERRAL_ATTACHMENTS {
-        uuid id PK
-        uuid referral_id FK
-        uuid uploaded_by FK
-        string storage_path
-        string file_name
-        string mime_type
-        bigint file_size
-        string scan_status "pending|clean|infected|failed"
-        timestamp scanned_at
-        timestamp deleted_at
-        uuid deleted_by FK
-        timestamp created_at
-    }
-
-    NOTIFICATIONS {
-        uuid id PK
-        uuid user_id FK
-        uuid referral_id FK
-        string type
-        string title
-        text body
-        timestamp read_at
-        timestamp created_at
-    }
-
-    NOTIFICATIONS_OUTBOX {
-        uuid id PK
-        uuid user_id
-        string type
-        jsonb payload
-        string status "pending|sent|failed"
-        integer attempts
-        timestamp next_retry_at
-        timestamp created_at
-    }
-
-    CONVERSATIONS {
-        uuid id PK
-        uuid referral_id FK
-        string type "referral|direct|group|role"
-        uuid created_by FK
-        timestamp created_at
-    }
-
-    CONVERSATION_MEMBERS {
-        uuid id PK
-        uuid conversation_id FK
-        uuid user_id FK
-        timestamp joined_at
-        timestamp left_at
-    }
-
-    MESSAGES {
-        uuid id PK
-        uuid conversation_id FK
-        uuid sender_id FK
-        text body
-        timestamp created_at
-    }
-
-    SHIFTS {
-        uuid id PK
-        uuid user_id FK
-        string role
-        date shift_date
-        string shift_type
-    }
-
-    AUDIT_LOGS {
-        uuid id PK
-        uuid actor_id FK
-        string action
-        string entity_type
-        uuid entity_id
-        jsonb details
-        timestamp created_at
-    }
-
-    AUTH_EVENTS {
-        uuid id PK
-        uuid user_id FK
-        string event_type "login|logout|failed_login|password_change|role_change"
-        string ip_address
-        string user_agent
-        jsonb details
-        timestamp created_at
-    }
-
-    IDEMPOTENCY_KEYS {
-        uuid id PK
-        uuid user_id
-        string endpoint
-        string request_hash
-        jsonb response_snapshot
-        timestamp created_at
-        timestamp expires_at
-    }
 3.2 تعريف الجداول المعدّلة (v1.1)
 A. users — جدول المستخدمين
 الحقل	النوع	الوصف	جديد في v1.1
