@@ -20,14 +20,14 @@ INSERT INTO public.wasl_allowed_transitions(from_status,to_status,role) VALUES
 ON CONFLICT DO NOTHING;
 
 CREATE SEQUENCE IF NOT EXISTS public.wasl_ref_no_seq;
-CREATE OR REPLACE FUNCTION public.next_ref_no() RETURNS text LANGUAGE plpgsql AS $$
+CREATE OR REPLACE FUNCTION public.next_ref_no() RETURNS text LANGUAGE plpgsql SET search_path = pg_catalog, public AS $$
 DECLARE y text := to_char(now() AT TIME ZONE 'UTC', 'YYYY'); n bigint;
 BEGIN n := nextval('public.wasl_ref_no_seq'); RETURN format('WASL-%s-%s', y, lpad(n::text, 6, '0')); END $$;
 
 CREATE OR REPLACE FUNCTION public.wasl_transition_referral_v1(
   p_referral_id uuid, p_expected_version integer, p_expected_status public.wasl_referral_status,
   p_to_status public.wasl_referral_status, p_notes text DEFAULT NULL, p_request_id text DEFAULT NULL
-) RETURNS public.referrals LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, app AS $$
+) RETURNS public.referrals LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog, public, app AS $$
 DECLARE r public.referrals; actor uuid; role_name public.wasl_user_role; old_status public.wasl_referral_status;
 BEGIN
   actor := app.current_wasl_user_id();

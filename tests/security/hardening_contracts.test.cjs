@@ -138,3 +138,22 @@ test('legacy service-role state routes fail closed', () => {
   assert.doesNotMatch(source, /SUPABASE_SERVICE_ROLE_KEY/);
   assert.doesNotMatch(source, /createClient\(/);
 });
+
+test('conversation UPDATE policies require membership in the source migrations', () => {
+  const source = read('database/003_conversations_isolation.sql');
+  const hardening = read('database/migrations/022_harden_chat_rls_functions_and_private_tables.sql');
+  assert.match(source, /app_private\.is_conversation_member/);
+  assert.match(source, /conversation_messages_update_sender[\s\S]*sender_id = auth\.uid\(\)[\s\S]*app_private\.is_conversation_member/);
+  assert.match(source, /conversation_attachments_update_owner[\s\S]*owner_id = auth\.uid\(\)[\s\S]*app_private\.is_conversation_member/);
+  assert.match(hardening, /set search_path = pg_catalog/i);
+  assert.match(hardening, /DROP FUNCTION IF EXISTS public\.is_conversation_member/);
+});
+
+test('database hardening source revokes low-level privileges and configures notification realtime', () => {
+  const privileges = read('database/migrations/023_revoke_low_level_privileges_and_harden_defaults.sql');
+  const realtime = read('database/migrations/024_notifications_realtime.sql');
+  assert.match(privileges, /REVOKE TRUNCATE, TRIGGER, REFERENCES/);
+  assert.match(privileges, /ALTER DEFAULT PRIVILEGES FOR ROLE postgres/);
+  assert.match(realtime, /ALTER PUBLICATION supabase_realtime ADD TABLE public\.notifications/);
+  assert.match(realtime, /REPLICA IDENTITY FULL/);
+});

@@ -21,7 +21,7 @@ create or replace function public.wasl_consume_rate_limit(
 ) returns boolean
 language plpgsql
 security definer
-set search_path = public
+set search_path = pg_catalog, public, app
 as $$
 declare
   v_window timestamptz;
@@ -47,7 +47,7 @@ create or replace function public.wasl_cleanup_rate_limits(
 ) returns integer
 language plpgsql
 security definer
-set search_path = public
+set search_path = pg_catalog, public, app
 as $$
 declare
   v_deleted integer;
@@ -67,7 +67,7 @@ create or replace function public.wasl_append_auth_notification(
 ) returns void
 language plpgsql
 security definer
-set search_path = public
+set search_path = pg_catalog, public, app
 as $$
 declare
   v_notification jsonb;
@@ -108,7 +108,7 @@ create or replace function public.wasl_create_conversation(
 ) returns jsonb
 language plpgsql
 security definer
-set search_path = public
+set search_path = pg_catalog, public, app
 as $$
 declare
   v_conversation public.conversations%rowtype;

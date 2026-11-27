@@ -44,7 +44,7 @@ create or replace function public.save_app_state(expected_revision integer, next
 returns jsonb
 language plpgsql
 security definer
-set search_path = public
+set search_path = pg_catalog, public, app
 as $$
 declare
   current_data jsonb;

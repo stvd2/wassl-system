@@ -47,7 +47,7 @@ grant execute on function public.save_app_state(integer, jsonb) to service_role;
 -- revoke all on storage.objects from anon, authenticated;
 
 create or replace function public.touch_user_profile()
-returns trigger language plpgsql security definer set search_path = public as $$
+returns trigger language plpgsql security definer set search_path = pg_catalog, public as $$
 begin
   new.updated_at := now();
   return new;

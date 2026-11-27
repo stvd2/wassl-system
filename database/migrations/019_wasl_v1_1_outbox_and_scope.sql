@@ -19,7 +19,7 @@ ALTER TABLE public.referrals ADD COLUMN IF NOT EXISTS latest_consultation_id uui
 CREATE OR REPLACE FUNCTION public.wasl_transition_referral_v1(
   p_referral_id uuid, p_expected_version integer, p_expected_status public.wasl_referral_status,
   p_to_status public.wasl_referral_status, p_notes text DEFAULT NULL, p_request_id text DEFAULT NULL
-) RETURNS public.referrals LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, app AS $$
+) RETURNS public.referrals LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog, public, app AS $$
 DECLARE r public.referrals; actor uuid; role_name public.wasl_user_role; old_status public.wasl_referral_status;
 BEGIN
   actor := app.current_wasl_user_id();

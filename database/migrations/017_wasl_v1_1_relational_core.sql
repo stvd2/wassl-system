@@ -164,17 +164,17 @@ CREATE INDEX IF NOT EXISTS attachments_referral_idx ON public.referral_attachmen
 CREATE INDEX IF NOT EXISTS audit_entity_idx ON public.wasl_audit_logs(entity_type, entity_id, created_at DESC);
 
 CREATE OR REPLACE FUNCTION app.current_wasl_user_id() RETURNS uuid
-LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public, app AS $$
+LANGUAGE sql STABLE SECURITY DEFINER SET search_path = pg_catalog, public, app AS $$
   SELECT id FROM public.users WHERE auth_user_id = auth.uid() AND status = 'active' LIMIT 1
 $$;
 
 CREATE OR REPLACE FUNCTION app.wasl_role() RETURNS text
-LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public, app AS $$
+LANGUAGE sql STABLE SECURITY DEFINER SET search_path = pg_catalog, public, app AS $$
   SELECT role::text FROM public.users WHERE auth_user_id = auth.uid() AND status = 'active' LIMIT 1
 $$;
 
 CREATE OR REPLACE FUNCTION app.wasl_can_access_referral(p_referral_id uuid) RETURNS boolean
-LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public, app AS $$
+LANGUAGE sql STABLE SECURITY DEFINER SET search_path = pg_catalog, public, app AS $$
   SELECT EXISTS (
     SELECT 1 FROM public.referrals r
     WHERE r.id = p_referral_id AND (
@@ -190,7 +190,7 @@ CREATE OR REPLACE FUNCTION public.wasl_transition_referral(
   p_referral_id uuid, p_expected_version integer, p_to_status public.wasl_referral_status,
   p_notes text DEFAULT NULL, p_request_id text DEFAULT NULL
 ) RETURNS public.referrals
-LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, app AS $$
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog, public, app AS $$
 DECLARE r public.referrals; actor uuid; role_name text;
 DECLARE old_status public.wasl_referral_status;
 BEGIN
@@ -229,7 +229,7 @@ DO $$ BEGIN CREATE POLICY attachments_scoped_read ON public.referral_attachments
 DO $$ BEGIN CREATE POLICY audit_admin_read ON public.wasl_audit_logs FOR SELECT USING (app.wasl_role() = 'admin'); EXCEPTION WHEN duplicate_object THEN NULL; END $$;
 
 -- Harden the legacy trigger without changing its data behavior.
-ALTER FUNCTION public.touch_app_state() SET search_path = public;
+ALTER FUNCTION public.touch_app_state() SET search_path = pg_catalog, public;
 REVOKE ALL ON FUNCTION public.touch_app_state() FROM PUBLIC, anon, authenticated;
 REVOKE ALL ON FUNCTION public.save_app_state(integer, jsonb) FROM PUBLIC, anon, authenticated;
 GRANT EXECUTE ON FUNCTION public.save_app_state(integer, jsonb) TO service_role;

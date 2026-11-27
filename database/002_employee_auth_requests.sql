@@ -41,7 +41,7 @@ revoke all on public.auth_requests from public, anon, authenticated;
 grant all privileges on public.auth_requests to service_role;
 
 create or replace function public.touch_auth_request()
-returns trigger language plpgsql security definer set search_path = public as $$
+returns trigger language plpgsql security definer set search_path = pg_catalog as $$
 begin
   new.updated_at := now();
   return new;

@@ -118,12 +118,14 @@ create index if not exists conversation_attachments_message_idx
 -- B) دالة مساعدة آمنة لفحص عضوية المحادثة
 -- ---------------------------------------------------------------------------
 
-create or replace function public.is_conversation_member(p_conversation_id uuid)
+create schema if not exists app_private;
+
+create or replace function app_private.is_conversation_member(p_conversation_id uuid)
 returns boolean
 language sql
 stable
 security definer
-set search_path = public
+set search_path = pg_catalog
 as $$
   select exists (
     select 1
@@ -133,11 +135,11 @@ as $$
   );
 $$;
 
-revoke all privileges on function public.is_conversation_member(uuid)
+revoke all privileges on function app_private.is_conversation_member(uuid)
   from public, anon;
-revoke execute on function public.is_conversation_member(uuid)
+revoke execute on function app_private.is_conversation_member(uuid)
   from public, anon;
-grant execute on function public.is_conversation_member(uuid)
+grant execute on function app_private.is_conversation_member(uuid)
   to authenticated, service_role;
 
 
@@ -177,7 +179,7 @@ grant all privileges on table public.conversations,
 create policy conversations_select_member
   on public.conversations
   for select to authenticated
-  using (public.is_conversation_member(id));
+  using (app_private.is_conversation_member(id));
 
 create policy conversations_insert_creator
   on public.conversations
@@ -202,7 +204,7 @@ create policy conversations_delete_creator
 create policy conversation_members_select_member
   on public.conversation_members
   for select to authenticated
-  using (public.is_conversation_member(conversation_id));
+  using (app_private.is_conversation_member(conversation_id));
 
 -- لا يسمح بالانضمام الذاتي إلى محادثة عبر تخمين UUID.
 -- الإضافة المباشرة محصورة بمنشئ المحادثة؛ ويستطيع API الخادمي استخدام service_role.
@@ -257,21 +259,27 @@ create policy conversation_members_delete_owner
 create policy conversation_messages_select_member
   on public.conversation_messages
   for select to authenticated
-  using (public.is_conversation_member(conversation_id));
+  using (app_private.is_conversation_member(conversation_id));
 
 create policy conversation_messages_insert_member
   on public.conversation_messages
   for insert to authenticated
   with check (
     sender_id = auth.uid()
-    and public.is_conversation_member(conversation_id)
+    and app_private.is_conversation_member(conversation_id)
   );
 
 create policy conversation_messages_update_sender
   on public.conversation_messages
   for update to authenticated
-  using (sender_id = auth.uid())
-  with check (sender_id = auth.uid());
+  using (
+    sender_id = auth.uid()
+    and app_private.is_conversation_member(conversation_id)
+  )
+  with check (
+    sender_id = auth.uid()
+    and app_private.is_conversation_member(conversation_id)
+  );
 
 create policy conversation_messages_delete_sender
   on public.conversation_messages
@@ -285,21 +293,27 @@ create policy conversation_messages_delete_sender
 create policy conversation_attachments_select_member
   on public.conversation_attachments
   for select to authenticated
-  using (public.is_conversation_member(conversation_id));
+  using (app_private.is_conversation_member(conversation_id));
 
 create policy conversation_attachments_insert_member
   on public.conversation_attachments
   for insert to authenticated
   with check (
     owner_id = auth.uid()
-    and public.is_conversation_member(conversation_id)
+    and app_private.is_conversation_member(conversation_id)
   );
 
 create policy conversation_attachments_update_owner
   on public.conversation_attachments
   for update to authenticated
-  using (owner_id = auth.uid())
-  with check (owner_id = auth.uid());
+  using (
+    owner_id = auth.uid()
+    and app_private.is_conversation_member(conversation_id)
+  )
+  with check (
+    owner_id = auth.uid()
+    and app_private.is_conversation_member(conversation_id)
+  );
 
 create policy conversation_attachments_delete_owner
   on public.conversation_attachments
@@ -323,7 +337,7 @@ create policy conversation_storage_select_member
       from public.conversation_attachments ca
       where ca.storage_bucket = storage.objects.bucket_id
         and ca.storage_path = storage.objects.name
-        and public.is_conversation_member(ca.conversation_id)
+        and app_private.is_conversation_member(ca.conversation_id)
     )
   );
 
@@ -338,7 +352,7 @@ create policy conversation_storage_insert_member
       where ca.storage_bucket = storage.objects.bucket_id
         and ca.storage_path = storage.objects.name
         and ca.owner_id = auth.uid()
-        and public.is_conversation_member(ca.conversation_id)
+        and app_private.is_conversation_member(ca.conversation_id)
     )
   );
 
@@ -363,7 +377,7 @@ create policy conversation_storage_update_owner
       where ca.storage_bucket = storage.objects.bucket_id
         and ca.storage_path = storage.objects.name
         and ca.owner_id = auth.uid()
-        and public.is_conversation_member(ca.conversation_id)
+        and app_private.is_conversation_member(ca.conversation_id)
     )
   );
 
