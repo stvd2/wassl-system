@@ -355,7 +355,7 @@ table.t th{background:#f2f7f5;color:#527068}table.t tr:hover td{background:#f7fb
 .login-logos img{max-width:30%;max-height:50px;object-fit:contain}
 @media(max-width:600px){.login-logos{gap:10px}.login-logos img{max-width:29%;max-height:42px}}
 
-/* Hail Health Cluster identity + bilingual shell */
+/* Makkah Health Cluster identity + bilingual shell */
 .language-switch-wrap{display:flex;justify-content:flex-start;margin:-8px 0 12px}
 .language-switch{background:#e8f3f0;color:#14594f;border:1px solid #c8e1d9;border-radius:999px;padding:7px 14px;font-size:12px;font-weight:800;cursor:pointer}
 .app-language-switch{background:rgba(255,255,255,.14);border-color:rgba(255,255,255,.32);color:#fff;white-space:nowrap}
@@ -370,6 +370,16 @@ html[dir="ltr"] .horizontal-nav #navArea{direction:ltr}
 html[dir="ltr"] .top{direction:ltr}
 html[dir="ltr"] .cluster-identity{text-align:center}
 
+/* Makkah Health Cluster identity + bilingual shell — logical properties */
+[dir="ltr"] .chat-item.active{border-right:0;border-left:3px solid var(--teal)}
+[dir="ltr"] .dept-resp{border-right:0;border-left:3px solid var(--teal)}
+[dir="ltr"] .outgoing-life{border-right:0;border-left:4px solid #b91c1c}
+[dir="ltr"] .shift-card .sh-del{left:auto;right:10px}
+[dir="ltr"] .notif-btn .badge{right:auto;left:-4px}
+[dir="ltr"] .toast{left:auto;right:20px}
+[dir="ltr"] .top .ur{direction:ltr}
+@media print{html[dir="rtl"] body{direction:rtl;text-align:right}html[dir="ltr"] body{direction:ltr;text-align:left}.no-print,.language-switch,.app-language-switch,.sync-now-btn{display:none!important}}
+
 </style>
 </head>
 <body>
@@ -378,7 +388,7 @@ html[dir="ltr"] .cluster-identity{text-align:center}
 <div id="loginScreen" class="lw">
   <div class="login">
     <div class="language-switch-wrap"><button type="button" class="language-switch" onclick="toggleLanguage()" aria-label="Switch language">English</button></div>
-    <div class="cluster-identity" aria-label="التجمع الصحي بحائل">التجمع الصحي بحائل <span>HAIL HEALTH CLUSTER</span></div>
+    <div class="cluster-identity" aria-label="تجمع مكة المكرمة الصحي">تجمع مكة المكرمة الصحي <span>MAKKAH HEALTH CLUSTER</span></div>
     <div class="login-logos" aria-label="الهوية الوطنية">
       <img src="assets/logos/vision.png" alt="رؤية السعودية 2030" onerror="this.onerror=null;this.style.display='none'">
     </div>
@@ -441,13 +451,23 @@ html[dir="ltr"] .cluster-identity{text-align:center}
 const WASL_EN = {
   nav:{dashboard:'Dashboard',outgoing:'All Referrals',outgoing_referrals:'Outgoing',forward_consultant:'Doctor Accepted',consultation_ready:'Ready Consultations',need_supplement:'More Information',bed_decisions:'Bed Decisions',reports:'Reports',doctor_inbox:'Inbox',doctor_responded:'Responded',bed_requests:'Bed Requests',bed_management:'Bed Management',users:'Users',audit:'Audit Log',db_monitor:'Database & Sync',chat:'Messages',shifts:'On-call Roster',notifications:'Notifications'},
   titles:{dashboard:['Dashboard','Overview of all referrals'],create:['New Referral','Register a new case'],outgoing:['All Referrals','All referrals in the system'],outgoing_referrals:['Outgoing','Outgoing referral workflow and follow-up'],forward_consultant:['Doctor Accepted','Referrals accepted by the doctor'],consultation_ready:['Ready Consultations','Consultations ready for printing and closure'],need_supplement:['More Information','Additional clinical information requested'],bed_decisions:['Bed Decisions','Pending bed decisions'],reports:['Reports','Completed referrals'],doctor_inbox:['Inbox','New referrals awaiting your decision'],doctor_responded:['Responded','Your previous decisions'],bed_requests:['Bed Requests','Requests awaiting bed decision'],bed_management:['Bed Management','Bed availability'],users:['Users','Account management'],audit:['Audit Log','System activity'],db_monitor:['Database & Sync','Server and synchronization status'],notifications:['Notifications','Alerts'],shifts:['On-call Roster','On-call schedule']},
-  login:{title:'Medical Referral Management System',heading:'Sign in',hint:'Enter your account credentials',username:'Username / Employee ID',password:'Password',forgot:'Forgot password?',click:'Click here',noAccount:"Don't have an account?",register:'Register',track:'Track registration request',trackClick:'Click here',loading:'Loading...'}
+  login:{title:'Medical Referral Management System',heading:'Sign in',hint:'Enter your account credentials',username:'Username / Employee ID',password:'Password',forgot:'Forgot password?',click:'Click here',noAccount:"Don't have an account?",register:'Register',track:'Track registration request',trackClick:'Click here',loading:'Loading...'},
+  states:{awaiting_doctor:'Awaiting Doctor',info_requested:'Info Requested',resubmitted:'Resubmitted',consultation_done:'Consultation Ready',doctor_accepted:'Doctor Accepted',doctor_rejected:'Doctor Rejected',awaiting_bed:'Awaiting Bed',bed_approved:'Bed Approved',bed_rejected:'Bed Rejected',completed:'Completed'},
+  actions:{'awaiting_doctor→doctor_accepted':'Accept Referral','awaiting_doctor→doctor_rejected':'Reject Referral','awaiting_doctor→info_requested':'Request More Info','awaiting_doctor→consultation_done':'Send Consultation to Coordinator','info_requested→resubmitted':'Send Supplement to Doctor','resubmitted→doctor_accepted':'Accept','resubmitted→doctor_rejected':'Reject','resubmitted→info_requested':'Request Additional Info','resubmitted→consultation_done':'Send Consultation to Coordinator','consultation_done→completed':'Close Consultation','doctor_accepted→awaiting_bed':'Route to Bed Management','doctor_accepted→completed':'Execute Admission & Close','doctor_rejected→completed':'Close Rejected Referral','awaiting_bed→bed_approved':'Approve Bed Request','awaiting_bed→bed_rejected':'Reject Bed Request','bed_approved→completed':'Close Referral','bed_rejected→awaiting_bed':'Resend to Bed Management'},
+  outgoing_states:{draft:'Draft',pending_coordinator:'Awaiting Coordinator',issued:'Officially Issued',follow_up:'Follow-up Required',accepted:'Accepted',closed:'Closed'},
+  referral_types:{'طارئ':'Emergency','تنويم عادي':'Routine Admission','عيادات':'Clinics','استشارة طبية':'Medical Consultation'},
+  bed_status:{free:'Available',busy:'Occupied',reserved:'Reserved',maintenance:'Maintenance'},
+  bed_types:{'طوارئ':'Emergency','سرير عادي':'Standard Bed','سرير عزل':'Isolation Bed','سرير عناية مركزة':'ICU Bed'},
+  shift_types:{'صباحي':'Morning','مسائي':'Evening','ليلي':'Night',morning:'Morning',evening:'Evening',night:'Night'},
+  departments:{'الباطنة':'Internal Medicine','العناية المركزة':'ICU','العظام':'Orthopedics','القلب':'Cardiology','العيادات':'Clinics','الجراحة العامة':'General Surgery','جراحة المخ والأعصاب':'Neurosurgery','الصدرية':'Pulmonology','الكلى':'Nephrology'},
+  roles:{coordinator:'Referral Coordinator',doctor:'Doctor',beds:'Bed Management',admin:'System Administrator',pending:'Pending Approval'},
+  notices:{langSwitched:'Language switched',saved:'Saved successfully',error:'An error occurred',notAuthorized:'Not authorized',confirmDelete:'Are you sure you want to delete?',yes:'Yes',no:'No',cancel:'Cancel',close:'Close'}
 };
 const WASL_I18N = {
   storageKey:'wasl_makkah_lang',
   labels:{
-    ar:{brand:'WASL – Makkah Health Cluster',subtitle:'تجمع مكة الصحي — مستشفيي الملك فيصل بمكة المكرمة',home:'الرئيسية',dashboard:'لوحة المؤشرات',create:'إحالة جديدة',outgoing_referrals:'الصادر',incoming:'الوارد',chat:'المحادثات',notifications:'الإشعارات',menu:'القائمة',reports:'التقارير',users:'المستخدمون',audit:'سجل التدقيق',db_monitor:'مراقبة القاعدة',shifts:'المناوبون',bed_management:'إدارة الأسرة',status:'الحالة',priority:'الأولوية',role:'الدور',normal:'عادية',clinics:'عيادات',emergency:'طارئة',life_saving:'إنقاذ حياة'},
-    en:{brand:'WASL – Makkah Health Cluster',subtitle:'Makkah Health Cluster — King Faisal Hospitals in Makkah',home:'Home',dashboard:'Dashboard',create:'New Referral',outgoing_referrals:'Outgoing',incoming:'Incoming',chat:'Messages',notifications:'Notifications',menu:'Menu',reports:'Reports',users:'Users',audit:'Audit Log',db_monitor:'Database Monitor',shifts:'On-call Roster',bed_management:'Bed Management',status:'Status',priority:'Priority',role:'Role',normal:'Normal',clinics:'Clinics',emergency:'Emergency',life_saving:'Life-saving'}
+    ar:{brand:'وصل – تجمع مكة المكرمة الصحي',subtitle:'تجمع مكة المكرمة الصحي — مستشفى الملك فيصل بمكة المكرمة',home:'الرئيسية',dashboard:'لوحة المؤشرات',create:'إحالة جديدة',outgoing_referrals:'الصادر',incoming:'الوارد',chat:'المحادثات',notifications:'الإشعارات',menu:'القائمة',reports:'التقارير',users:'المستخدمون',audit:'سجل التدقيق',db_monitor:'مراقبة القاعدة',shifts:'المناوبون',bed_management:'إدارة الأسرة',status:'الحالة',priority:'الأولوية',role:'الدور',normal:'عادية',clinics:'عيادات',emergency:'طارئة',life_saving:'إنقاذ حياة'},
+    en:{brand:'WASL – Makkah Health Cluster',subtitle:'Makkah Health Cluster — King Faisal Hospital in Makkah',home:'Home',dashboard:'Dashboard',create:'New Referral',outgoing_referrals:'Outgoing',incoming:'Incoming',chat:'Messages',notifications:'Notifications',menu:'Menu',reports:'Reports',users:'Users',audit:'Audit Log',db_monitor:'Database Monitor',shifts:'On-call Roster',bed_management:'Bed Management',status:'Status',priority:'Priority',role:'Role',normal:'Normal',clinics:'Clinics',emergency:'Emergency',life_saving:'Life-saving'}
   },
   labelFor(key, fallback){ const set=this.labels[WASL_LANG]||this.labels.ar; return set[key] || (WASL_LANG==='en' ? (WASL_EN.nav[key]||fallback||key) : (fallback||key)); },
   renderVerbatim(value, tag='span', attrs=''){ return `<${tag} class=\"verbatim\" dir=\"auto\" ${attrs}>${esc(value ?? '')}</${tag}>`; },
@@ -460,6 +480,19 @@ function syncPrintDocument(doc){ return WASL_I18N.syncPrintDocument(doc); }
 function setLanguage(lang){ WASL_LANG=lang==='en'?'en':'ar'; localStorage.setItem(WASL_I18N.storageKey,WASL_LANG); localStorage.setItem('wasl_language',WASL_LANG); applyLanguage(); }
 function tNav(id, fallback){return WASL_LANG==='en'?(WASL_EN.nav[id]||fallback):fallback;}
 function toggleLanguage(){setLanguage(WASL_LANG==='ar'?'en':'ar');}
+// Display helpers: translate labels only; never mutate persisted workflow values.
+function tState(code){ const st=STATES[code]; if(!st) return code || '—'; return WASL_LANG==='en' ? (WASL_EN.states[code] || st.label) : st.label; }
+function tStateCls(code){ return (STATES[code] || {}).cls || 'pill'; }
+function tAction(key){ const action=ACTION_PERMS[key]; if(!action) return key; return WASL_LANG==='en' ? (WASL_EN.actions[key] || action.label) : action.label; }
+function tOutgoingState(code){ const st=OUTGOING_STATES[code]; if(!st) return code || '—'; return WASL_LANG==='en' ? (WASL_EN.outgoing_states[code] || st.label) : st.label; }
+function tReferralType(ar){ if(!ar) return '—'; return WASL_LANG==='en' ? (WASL_EN.referral_types[ar] || ar) : ar; }
+function tBedStatus(code){ const ar={free:'متاح',busy:'مشغول',reserved:'محجوز',maintenance:'صيانة'}; return WASL_LANG==='en' ? (WASL_EN.bed_status[code] || code) : (ar[code] || code); }
+function tBedType(ar){ if(!ar) return '—'; return WASL_LANG==='en' ? (WASL_EN.bed_types[ar] || ar) : ar; }
+function tShiftType(type){ if(!type) return '—'; return WASL_LANG==='en' ? (WASL_EN.shift_types[type] || type) : type; }
+function tDept(ar){ if(!ar) return '—'; return WASL_LANG==='en' ? (WASL_EN.departments[ar] || ar) : ar; }
+function tSpecialty(ar){ if(!ar) return '—'; const pair=MEDICAL_SPECIALTIES.find(([a])=>a===ar); return WASL_LANG==='en' && pair ? pair[1] : ar; }
+function tRole(role){ return WASL_LANG==='en' ? (WASL_EN.roles[role] || role) : (({coordinator:'منسق الإحالات',doctor:'طبيب',beds:'إدارة الأسرة',admin:'مدير النظام',pending:'بانتظار الموافقة'})[role] || role); }
+function tNotice(key){ return WASL_LANG==='en' ? (WASL_EN.notices[key] || key) : key; }
 function updateMobileNavLabels(){ const map={home:'home',chat:'chat',notifications:'notifications',menu:'menu'}; document.querySelectorAll('[data-mobile-nav]').forEach(b=>{const key=map[b.dataset.mobileNav]; const spans=b.querySelectorAll('span'); if(spans[1]) spans[1].childNodes[0].textContent=labelFor(key,spans[1].childNodes[0].textContent.trim())+' ';}); }
 function applyLanguage(){
   const en=WASL_LANG==='en';document.documentElement.lang=en?'en':'ar';document.documentElement.dir=en?'ltr':'rtl';
@@ -475,7 +508,15 @@ function applyLanguage(){
   }
   const headerSub=document.querySelector('#app .tl small');if(headerSub)headerSub.textContent=en?WASL_EN.login.title:'نظام إدارة الإحالات الطبية';
   const create=document.getElementById('topCreateReferral');if(create)create.textContent=en?'+ New Referral':'＋ إحالة جديدة';
-  updateMobileNavLabels();if(typeof buildNav==='function'&&CURRENT_USER){buildNav();if(SECTION_MODAL_ACTIVE&&PAGE)openSectionModal(PAGE);}
+  updateMobileNavLabels();
+  if(typeof buildNav==='function'&&CURRENT_USER){buildNav();if(SECTION_MODAL_ACTIVE&&PAGE)openSectionModal(PAGE);}
+  const i18nModalOpen = !!document.querySelector('.modal-back')
+    || (typeof CREATE_MODAL_ACTIVE !== 'undefined' && CREATE_MODAL_ACTIVE)
+    || (typeof SECTION_MODAL_ACTIVE !== 'undefined' && SECTION_MODAL_ACTIVE);
+  if(typeof refreshCurrentView==='function'&&CURRENT_USER){
+    if(i18nModalOpen) toast('تم تبديل اللغة، أغلق النموذج لرؤية التغييرات','warn');
+    else { try{refreshCurrentView();}catch(e){console.warn('[WASL i18n] refreshCurrentView:',e.message);} }
+  }
 }
 
 // ═══════════════════════════════════════════════════════════════════
@@ -705,8 +746,8 @@ const $ = id => document.getElementById(id);
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
 const nowIso = () => new Date().toISOString();
-const fmtDate = iso => iso ? new Date(iso).toLocaleString('ar-SA', { dateStyle: 'short', timeStyle: 'short' }) : '—';
-const roleLabel = r => { const ar={coordinator:'منسق الإحالات',doctor:'طبيب',beds:'إدارة الأسرة',admin:'مدير النظام',pending:'بانتظار الموافقة'}; const en={coordinator:'Referral Coordinator',doctor:'Doctor',beds:'Bed Management',admin:'System Administrator',pending:'Pending Approval'}; return (WASL_LANG==='en'?en:ar)[r] || r; };
+const fmtDate = iso => iso ? new Date(iso).toLocaleString(WASL_LANG === 'en' ? 'en-US' : 'ar-SA', { dateStyle: 'short', timeStyle: 'short' }) : '—';
+const roleLabel = r => tRole(r);
 const fmtSize = b => { if (!b) return '0 B'; if (b > 1048576) return (b/1048576).toFixed(1)+' م.ب'; if (b > 1024) return Math.round(b/1024)+' ك.ب'; return b+' B'; };
 const refNoOf = r => (r.ref_no || r.id || '');
 const isDirectER = r => r && r.ward_type === 'طوارئ' && r.emergency_admission === true;
@@ -2350,7 +2391,7 @@ function tableHTML(list) {
       <td>${typeChip(r)}</td>
       <td>${r.target_specialty ? '🎯 ' + esc(r.target_specialty) : esc(r.specialty || '—')}</td>
       <td>${esc(r.priority || '—')}</td>
-      <td><span class="pill ${st.cls}">${st.label}</span>${actor}</td>
+      <td><span class="pill ${st.cls}">${tState(r.status)}</span>${actor}</td>
       <td>${r.bed_number ? `<b>${esc(r.bed_number)}</b>` : '—'}</td>
       <td style="font-size:11px;color:var(--muted);white-space:nowrap">${fmtDate(r.updated_at || r.created_at)}</td>
       <td><button class="secondary sm" onclick="event.stopPropagation();openDetail('${esc(r.id)}')">👁 عرض</button><span onclick="event.stopPropagation()">${referralActionButtons(r)}</span></td>
@@ -2538,9 +2579,9 @@ function openDetail(id) {
     const tst = STATES[t.to] || {};
     const cls = t.to === 'completed' ? 'completed' : ['doctor_rejected','bed_rejected'].includes(t.to) ? 'rejected' : '';
     return `<div class="tl-item ${cls}">
-      <div class="tl-header"><div class="tl-action">${esc(t.action)}</div><div class="tl-time">${fmtDate(t.ts)}</div></div>
+      <div class="tl-header"><div class="tl-action">${esc(tAction(t.action))}</div><div class="tl-time">${fmtDate(t.ts)}</div></div>
       <div class="tl-user">${esc(t.user)} — ${roleLabel(t.role)}</div>
-      ${t.to && t.to !== t.from ? `<div style="font-size:12px;color:var(--muted);margin-top:3px">${esc(STATES[t.from]?.label || t.from)} → <b style="color:${tst.color || '#333'}">${esc(tst.label || t.to)}</b></div>` : ''}
+      ${t.to && t.to !== t.from ? `<div style="font-size:12px;color:var(--muted);margin-top:3px">${esc(tState(t.from))} → <b style="color:${tst.color || '#333'}">${esc(tState(t.to))}</b></div>` : ''}
       ${t.details && Object.keys(t.details).length ? `<div class="tl-detail">${formatDetails(t.details)}</div>` : ''}
     </div>`;
   }).join('') || '<div class="empty">لا سجل</div>';
@@ -2548,7 +2589,7 @@ function openDetail(id) {
   const attsHtml = atts.length ? `<div class="att-list">${atts.map(a => `
     <div class="att">
       <div class="file-icon">${fileIcon(a.type)}</div>
-      <div class="att-meta"><b>${esc(a.name)}</b><small>${fmtSize(a.size)}</small></div>
+      <div class="att-meta">${renderVerbatim(a.name, 'b')}<small>${fmtSize(a.size)}</small></div>
       <button class="secondary xs" onclick="downloadAtt('${esc(a.id)}')">⤓</button>
       <button class="ghost xs" onclick="previewAtt('${esc(a.id)}')">👁</button>
     </div>`).join('')}</div>` : '<div style="color:var(--muted);font-size:12.5px">لا مرفقات</div>';
@@ -2570,7 +2611,7 @@ function openDetail(id) {
   if (r.bed_number) fields.push(['السرير', r.bed_number + (r.bed_type ? ' (' + r.bed_type + ')' : '')]);
 
   let rejectionNotice = '';
-  if (r.doctor_decision === 'rejected' && r.rejection_reason) rejectionNotice = `<div class="panel" style="margin:0 0 14px 0;box-shadow:none;background:#fff0f0"><h3>❌ سبب رفض الطبيب</h3><p>${esc(r.rejection_reason)}</p></div>`;
+  if (r.doctor_decision === 'rejected' && r.rejection_reason) rejectionNotice = `<div class="panel" style="margin:0 0 14px 0;box-shadow:none;background:#fff0f0"><h3>❌ سبب رفض الطبيب</h3><p>${renderVerbatim(r.rejection_reason, 'span')}</p></div>`;
   if (r.bed_rejection_reason) rejectionNotice += `<div class="panel" style="margin:0 0 14px 0;box-shadow:none;background:#fff0f0"><h3>❌ سبب رفض إدارة الأسرة</h3><p>${esc(r.bed_rejection_reason)}</p></div>`;
 
   const doctorUser = r.assigned_doctor_id ? DATA.users.find(u => u.id === r.assigned_doctor_id) : null;
@@ -2578,10 +2619,10 @@ function openDetail(id) {
     <div class="cons-box">
       <h4>📋 الاستشارة الطبية</h4>
       <div class="cons-section"><small>الطبيب المستشير</small><p>${esc(doctorUser ? doctorUser.full_name : '—')}${r.consultation_at ? ` <span style="color:var(--muted);font-size:11px">— ${fmtDate(r.consultation_at)}</span>` : ''}</p></div>
-      <div class="cons-section"><small>رأي الطبيب</small><p>${esc(r.consultation_opinion || '—')}</p></div>
-      <div class="cons-section"><small>التوصيات</small><p>${esc(r.consultation_recommendations || '—')}</p></div>
+      <div class="cons-section"><small>رأي الطبيب</small><p>${renderVerbatim(r.consultation_opinion || '—', 'span')}</p></div>
+      <div class="cons-section"><small>التوصيات</small><p>${renderVerbatim(r.consultation_recommendations || '—', 'span')}</p></div>
       ${r.consultation_followup && r.consultation_followup !== 'لا' ? `<div class="cons-section"><small>المتابعة</small><p>${esc(r.consultation_followup)}</p></div>` : ''}
-      ${r.consultation_notes ? `<div class="cons-section"><small>ملاحظات</small><p>${esc(r.consultation_notes)}</p></div>` : ''}
+      ${r.consultation_notes ? `<div class="cons-section"><small>ملاحظات</small><p>${renderVerbatim(r.consultation_notes, 'span')}</p></div>` : ''}
     </div>` : '';
 
   const targetDept = targetSpecialtyOf(r);
@@ -2599,7 +2640,7 @@ function openDetail(id) {
     <div class="dept-resp">
       <div class="dr-head"><b>🏥 ${esc(x.department)}</b><span class="pill ${recommendPill(x.recommendation)}">${esc(x.recommendation)}</span></div>
       <div class="dr-meta">${esc(x.doctor_name)} — ${fmtDate(x.responded_at)}</div>
-      <p>${esc(x.notes)}</p>
+      <p>${renderVerbatim(x.notes, 'span')}</p>
     </div>`).join('')}</div>` : '<div style="color:var(--muted);font-size:12.5px">لا ردود بعد</div>';
 
   const actionForms = renderActionForms(r, actions);
@@ -2609,13 +2650,13 @@ function openDetail(id) {
       <h3>${esc(refNoOf(r))} — ${esc(r.patient_name)}</h3>
       <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
         ${typeChip(r)}
-        <span class="pill ${st.cls}" style="font-size:12px;padding:6px 14px">${st.label}</span>
+        <span class="pill ${st.cls}" style="font-size:12px;padding:6px 14px">${tState(r.status)}</span>
         <button class="ghost sm" onclick="closeModal()">✕</button>
       </div>
     </div>
     <div class="dgrid">${fields.map(x => `<div class="d"><small>${esc(x[0])}</small><strong>${esc(x[1] || '—')}</strong></div>`).join('')}</div>
     <div class="panel" style="box-shadow:none;margin:0 0 14px 0"><h3>التشخيص</h3>
-      <p style="line-height:1.8">${esc(r.diagnosis)}</p>
+      <p style="line-height:1.8">${renderVerbatim(r.diagnosis, 'span')}</p>
       ${r.notes ? `<div style="color:var(--muted);margin-top:10px;font-size:12.5px">📝 ${renderVerbatim(r.notes, 'span')}</div>` : ''}
     </div>
     ${rejectionNotice}
@@ -2624,7 +2665,7 @@ function openDetail(id) {
     ${consultDepts.length ? `<div class="panel" style="box-shadow:none;margin:0 0 14px 0"><h3>📋 ردود الأقسام المستشارة (${deptResponses.length} من ${consultDepts.length})</h3>${responsesHtml}</div>` : ''}
     ${r.needed_info ? `<div class="panel" style="box-shadow:none;background:#fff8e9"><h3>📝 المطلوب استكماله</h3><p>${esc(r.needed_info)}</p></div>` : ''}
     ${r.supplement_notes ? `<div class="panel" style="box-shadow:none;background:#f0f6ff"><h3>↻ الاستكمال المُرسل</h3><p>${esc(r.supplement_notes)}</p></div>` : ''}
-    ${r.doctor_decision === 'accepted' ? `<div class="panel" style="box-shadow:none;background:#e7f6ee"><h3>✓ رد الطبيب</h3><p><b>${esc(r.admission_type || 'قبول')}</b>${r.ward_type ? ' — ' + esc(r.ward_type) : ''}</p>${r.doctor_notes ? `<div style="margin-top:10px;padding:10px 12px;background:#fff;border-radius:8px"><p style="margin:0;line-height:1.7">${esc(r.doctor_notes)}</p></div>` : ''}</div>` : ''}
+    ${r.doctor_decision === 'accepted' ? `<div class="panel" style="box-shadow:none;background:#e7f6ee"><h3>✓ رد الطبيب</h3><p><b>${esc(r.admission_type || 'قبول')}</b>${r.ward_type ? ' — ' + esc(r.ward_type) : ''}</p>${r.doctor_notes ? `<div style="margin-top:10px;padding:10px 12px;background:#fff;border-radius:8px"><p style="margin:0;line-height:1.7">${renderVerbatim(r.doctor_notes, 'span')}</p></div>` : ''}</div>` : ''}
     ${isDirectER(r) ? `<div class="panel" style="box-shadow:none;background:#fef2f2"><h3 style="color:var(--red)">🚨 قبول للتنويم</h3><p>بدون حجز سرير</p></div>` : ''}
     ${r.bed_number ? `<div class="panel" style="box-shadow:none;background:#f8f5ff"><h3>🛏 بيانات السرير</h3><div class="dgrid" style="margin:0"><div class="d"><small>الرقم</small><strong>${esc(r.bed_number)}</strong></div><div class="d"><small>النوع</small><strong>${esc(r.bed_type || '—')}</strong></div><div class="d"><small>القسم</small><strong>${esc(r.bed_ward || '—')}</strong></div><div class="d"><small>المدة</small><strong>${esc(r.bed_duration || '—')}</strong></div></div></div>` : ''}
     <div class="panel" style="box-shadow:none;margin:0 0 14px 0"><h3>📎 المرفقات (${atts.length})</h3>${attsHtml}</div>
@@ -2882,7 +2923,7 @@ function renderActionForm(r, action) {
     return `<div class="action-form"><button class="primary" style="width:100%;padding:14px" onclick="openPrint('${r.id}')">${label}</button></div>`;
   }
   let fields = '';
-  let actionLabel = action.label;
+  let actionLabel = tAction(`${r.status}→${action.to}`) || action.label;
   let actionIcon = action.icon || '';
   if (action.to === 'completed' && r.status === 'doctor_accepted') {
     if (r.admission_type === 'قبول عيادات') actionLabel = 'تنفيذ قبول العيادات وإغلاق';
@@ -2891,7 +2932,7 @@ function renderActionForm(r, action) {
   if (action.to === 'resubmitted') fields = `<div class="field full"><label>ملخص الاستكمال *</label><textarea name="notes" required></textarea></div>`;
   else if (action.to === 'bed_approved') {
     fields = `<div class="field"><label>توفر السرير *</label><select name="bed_available" required><option value="نعم">نعم</option><option value="لا">لا</option></select></div>
-      <div class="field"><label>نوع السرير *</label><select name="bed_type" required><option value="">— اختر —</option>${BED_TYPE_OPTIONS.map(x => `<option value="${esc(x)}">${esc(x)}</option>`).join('')}</select></div>
+      <div class="field"><label>نوع السرير *</label><select name="bed_type" required><option value="">— اختر —</option>${BED_TYPE_OPTIONS.map(x => `<option value="${esc(x)}">${esc(tBedType(x))}</option>`).join('')}</select></div>
       <div class="field"><label>القسم *</label><input name="bed_ward" placeholder="مثال: عناية مركزة" required></div>
       <div class="field"><label>السرير المتاح *</label><select name="bed_number" required><option value="">— اختر سريراً متاحاً —</option>${(DATA.beds || []).filter(b => b.available === true).map(b => `<option value="${esc(b.number || b.id)}">${esc(b.number || b.id)}${b.ward ? ' — ' + esc(b.ward) : ''}</option>`).join('')}</select></div>
       <div class="field"><label>تاريخ دخول المريض</label><input type="date" name="admission_date"></div>
@@ -3377,6 +3418,7 @@ body { font-family: 'Cairo', sans-serif; margin: 0; padding: 0; background: #fff
 .print-btn { position: fixed; top: 10px; left: 10px; padding: 10px 18px; background: #059669; color: #fff; border: none; border-radius: 6px; cursor: pointer; font-weight: 700; font-size: 13px; z-index: 99; font-family: inherit; box-shadow: 0 4px 12px rgba(0,0,0,.2); }
 .print-btn:disabled { background: #94a3b8; cursor: wait; }
 @media print { @page { size: A4 portrait; margin: 0; } html, body { height: auto !important; margin: 0 !important; padding: 0 !important; background: #fff !important; overflow: visible !important; } .print-btn { display: none !important; } .preview-wrapper { padding: 0 !important; display: block !important; } .doc-container { border: none !important; padding: 6mm 8mm !important; width: 100% !important; min-height: auto !important; } .tbl-header, tr.tbl-header, th.tbl-header, td.tbl-header { background-color: var(--theme-color) !important; color: #fff !important; } .badge-sub { background-color: var(--theme-light) !important; border-color: var(--theme-color) !important; color: var(--theme-color) !important; } .print-header { border-bottom: 3px solid var(--theme-color) !important; } .tmpl-table { page-break-inside: avoid; } }
+
 </style></head><body>
 <button class="print-btn" id="printBtn" disabled onclick="window.print()">🖨️ طباعة</button>
 <div class="preview-wrapper"><div class="doc-container">${header}${topBar}${patientBlock}${content}${footer}</div></div>
@@ -3563,7 +3605,7 @@ function renderChatPage() {
   const onCall = getTodayShifts();
   const target = CHAT_TAB === 'direct' ? directChats : groupChats;
   $('main').innerHTML = `
-    ${onCall.length ? `<div class="oncall-banner"><h4>🔔 المناوبون الآن</h4><div class="oncall-list">${onCall.map(s => `<span class="oncall-chip">${esc(s.user_name)} — ${esc(s.shift)}</span>`).join('')}</div></div>` : ''}
+    ${onCall.length ? `<div class="oncall-banner"><h4>🔔 المناوبون الآن</h4><div class="oncall-list">${onCall.map(s => `<span class="oncall-chip">${esc(s.user_name)} — ${esc(tShiftType(s.shift))}</span>`).join('')}</div></div>` : ''}
     <div class="chat-wrap">
       <div class="chat-side show" id="chatSide">
         <div class="chat-head"><strong style="font-size:14px;color:var(--navy)">💬 المحادثات</strong><button class="primary xs" onclick="showNewChatPicker()" title="محادثة جديدة">＋</button></div>
@@ -3661,7 +3703,7 @@ function renderMessage(chat, m) {
       if ((a.type || '').startsWith('image/')) {
         return `<div class="att-file" onclick="previewAtt('${a.id}')" style="padding:3px"><img data-att="${a.id}" alt="${esc(a.name)}" style="max-width:220px;max-height:220px;border-radius:6px;display:block;cursor:pointer" loading="lazy"></div>`;
       }
-      return `<div class="att-file" onclick="previewAtt('${a.id}')">📕 ${esc(a.name)} <span style="color:var(--muted);font-weight:400">${fmtSize(a.size)}</span></div>`;
+      return `<div class="att-file" onclick="previewAtt('${a.id}')">📕 ${renderVerbatim(a.name)} <span style="color:var(--muted);font-weight:400">${fmtSize(a.size)}</span></div>`;
     }).join('')}</div>` : ''}
     <div class="time">${time}</div>
   </div>`;
@@ -3812,7 +3854,7 @@ function renderShiftCard(s, isToday) {
     <div class="sh-date">📅 ${s.date}</div>
     <div class="sh-user">${esc(s.user_name)}</div>
     <div class="sh-role">${roleLabel(s.role)}</div>
-    <span class="sh-badge ${s.shift==='مسائي'?'evening':s.shift==='ليلي'?'night':''}">${s.shift==='صباحي'?'🌅':s.shift==='مسائي'?'🌇':'🌙'} ${esc(s.shift)}</span>
+    <span class="sh-badge ${s.shift==='مسائي'?'evening':s.shift==='ليلي'?'night':''}">${s.shift==='صباحي'?'🌅':s.shift==='مسائي'?'🌇':'🌙'} ${esc(tShiftType(s.shift))}</span>
     ${s.notes ? `<div class="sh-notes">📝 ${esc(s.notes)}</div>` : ''}${s.attachment_id ? `<button class="secondary xs" style="margin-top:8px" onclick="downloadAtt('${esc(s.attachment_id)}')">📎 ${esc(s.attachment_name || 'فتح المرفق')}</button>` : ''}
   </div>`;
 }
