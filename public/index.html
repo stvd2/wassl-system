@@ -175,6 +175,18 @@ html[dir="ltr"] body{text-align:left}html[dir="rtl"] body{text-align:right}
 .cons-box .cons-section small{color:#344B52;font-size:11px;font-weight:700;display:block;margin-bottom:4px}
 .cons-box .cons-section p{margin:0;line-height:1.7;font-size:13px;color:var(--text);white-space:pre-wrap}
 
+
+/* الهوية الصحية ولوحة المؤشرات */
+.dashboard-shell{font-family:"IBM Plex Sans Arabic","Cairo",sans-serif}
+.dashboard-intro h2,.dashboard-card h3,.metric-card strong{font-family:"IBM Plex Sans Arabic",sans-serif}
+.kpi-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px;margin:14px 0 18px}
+.kpi-card{background:var(--color-card-bg);border:1px solid #E2E8E6;border-radius:12px;padding:16px;box-shadow:0 2px 8px rgba(7,91,80,.06);min-height:112px}
+.kpi-card.gold{border-top:3px solid var(--color-accent-gold)}
+.kpi-card .kpi-label{font-size:12px;color:var(--muted);display:block}.kpi-card strong{display:block;font-size:27px;color:var(--color-primary-dark);margin:6px 0}.kpi-card small{color:var(--muted);font-size:11px}
+.dashboard-chart{background:#fff;border:1px solid #E2E8E6;border-radius:12px;padding:18px;min-height:220px}.chart-bars{height:150px;display:flex;align-items:end;gap:10px;border-bottom:1px solid var(--line);padding:8px 4px 0}.chart-day{flex:1;display:flex;align-items:end;justify-content:center;gap:3px;height:100%}.chart-bar{width:12px;border-radius:5px 5px 0 0;min-height:3px}.chart-bar.incoming{background:var(--color-primary-dark)}.chart-bar.done{background:var(--color-accent-turquoise)}.chart-legend{display:flex;gap:18px;font-size:11px;color:var(--muted);margin-top:10px}.chart-legend i{display:inline-block;width:10px;height:10px;border-radius:3px;margin-left:4px}.chart-labels{display:flex;gap:10px}.chart-labels span{flex:1;text-align:center;font-size:10px;color:var(--muted);margin-top:5px}
+.dashboard-three{display:grid;grid-template-columns:30% 35% 35%;gap:14px;margin-top:14px}.mini-list{display:grid;gap:9px}.mini-list div{display:flex;justify-content:space-between;gap:8px;padding:9px;background:#F7FAF9;border-radius:8px;font-size:12px}.mini-list b{color:var(--color-primary-dark)}
+@media(max-width:900px){.kpi-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.dashboard-three{grid-template-columns:1fr}}
+
 /* ═══════ الدردشة ═══════ */
 .chat-wrap{display:grid;grid-template-columns:300px 1fr;height:calc(100dvh - 66px - 100px);min-height:320px;background:#fff;border-radius:14px;overflow:hidden;box-shadow:var(--shadow);border:1px solid var(--line)}
 .chat-side{background:#f7f9fa;border-left:1px solid var(--line);overflow-y:auto;display:flex;flex-direction:column}
@@ -554,6 +566,7 @@ let REALTIME_CHANNEL = null;
 let REALTIME_REFRESH_TIMER = null;
 let REALTIME_POLL_TIMER = null;
 let REALTIME_REFRESHING = false;
+let REALTIME_REFRESH_PENDING = false;
 const SYNC_CHANNEL = ('BroadcastChannel' in window) ? new BroadcastChannel('wasl_sync_channel') : null;
 let LOCAL_CHANGE_AT = '';
 let LAST_REMOTE_REVISION = 0;
@@ -585,8 +598,23 @@ function canCreateReferral() {
   return !!CURRENT_USER && CREATE_REFERRAL_ROLES.includes(CURRENT_USER.role) && CURRENT_USER.active !== false && !CURRENT_USER.pending_approval;
 }
 
+function isUserEditing() {
+  const el = document.activeElement;
+  return !!el && (el.matches('input:not([type="file"]), textarea, select, [contenteditable="true"]') || el.closest('form'));
+}
+function restoreFocusAfterRefresh(snapshot) {
+  if (!snapshot?.id && !snapshot?.name) return;
+  const selector = snapshot.id ? `#${CSS.escape(snapshot.id)}` : `[name="${CSS.escape(snapshot.name)}"]`;
+  const el = document.querySelector(selector);
+  if (!el) return;
+  try { el.focus({ preventScroll: true }); if (typeof snapshot.start === 'number' && el.setSelectionRange) el.setSelectionRange(snapshot.start, snapshot.end ?? snapshot.start); } catch (e) {}
+}
 async function refreshFromRealtime() {
   if (REALTIME_REFRESHING || _syncBlocked || ACTIVE_ATTACHMENT_UPLOADS || LOCAL_CHANGE_SERIAL !== CONFIRMED_CHANGE_SERIAL) return;
+  if (isUserEditing()) { REALTIME_REFRESH_PENDING = true; return; }
+  REALTIME_REFRESH_PENDING = false;
+  const active = document.activeElement;
+  const focusSnapshot = active && { id: active.id, name: active.name, start: active.selectionStart, end: active.selectionEnd };
   REALTIME_REFRESHING = true;
   try {
     const next = await loadData();
@@ -610,6 +638,7 @@ async function refreshFromRealtime() {
         $('userRole').textContent = roleLabel(CURRENT_USER.role) + (CURRENT_USER.department ? ' — ' + CURRENT_USER.department : '');
         $('userAvatar').textContent = CURRENT_USER.full_name[0];
         refreshCurrentView();
+        restoreFocusAfterRefresh(focusSnapshot);
       }
     }
   } catch (e) {
@@ -619,6 +648,10 @@ async function refreshFromRealtime() {
   }
 }
 
+document.addEventListener('focusout', () => {
+  if (!REALTIME_REFRESH_PENDING) return;
+  setTimeout(() => { if (!isUserEditing()) refreshFromRealtime(); }, 150);
+}, true);
 function setupRealtime() {
   if (!REALTIME_POLL_TIMER) REALTIME_POLL_TIMER = setInterval(() => refreshFromRealtime(), 8000);
   window.addEventListener('focus', () => refreshFromRealtime());
@@ -751,7 +784,8 @@ const roleLabel = r => tRole(r);
 const fmtSize = b => { if (!b) return '0 B'; if (b > 1048576) return (b/1048576).toFixed(1)+' م.ب'; if (b > 1024) return Math.round(b/1024)+' ك.ب'; return b+' B'; };
 const refNoOf = r => (r.ref_no || r.id || '');
 const isDirectER = r => r && r.ward_type === 'طوارئ' && r.emergency_admission === true;
-const isConsultation = r => r && r.priority === 'استشارة طبية';
+const isConsultation = r => !!(r && (r.status === 'consulting' || r.status === 'awaiting_final' || r.status === 'consultation_done' || r.priority === 'استشارة طبية'));
+const isLegacyReferral = r => !!(r && LEGACY_STATES[r.status]);
 const typeMetaOf = r => REFERRAL_TYPE_META[r.priority] || { label: r.priority || '—', icon: '📄', chip: '', color: '#475569' };
 const typeChip = r => {
   const m = typeMetaOf(r);
@@ -766,16 +800,23 @@ const targetSpecialtyOf = r => (r.target_specialty || r.specialty || '—');
 
 // هل هذه الإحالة واردة لطبيب معيّن (حسب قسمه)؟
 function isReferralInDoctorInbox(r) {
+  if (CURRENT_USER?.role !== 'doctor') return false;
   const dept = CURRENT_USER.department;
-  if (r.status === 'awaiting_doctor') {
-    return !!dept && (r.departments || []).includes(dept) && !(r.department_responses || []).some(x => x.department === dept);
+  if (!dept || !['awaiting_doctor', 'resubmitted'].includes(r.status)) return false;
+  if (isReferralInConsultationStage(r)) {
+    return r.status === 'awaiting_doctor' && referralConsultDepartments(r).includes(dept) && !(r.department_responses || []).some(x => x.department === dept);
   }
-  if (r.status === 'awaiting_doctor') return !!dept && r.target_specialty === dept;
-  if (r.status === 'awaiting_doctor' || r.status === 'resubmitted') {
-    if (!r.target_specialty) return true; // توافق قديم: إحالات قديمة بدون قسم نهائي تظهر لكل الأطباء
-    return !!dept && r.target_specialty === dept;
-  }
-  return false;
+  if (!r.target_specialty) return true; // توافق قديم: إحالات قديمة بدون قسم نهائي تظهر لكل الأطباء
+  return r.target_specialty === dept;
+}
+function referralConsultDepartments(r) {
+  const target = String(r?.target_specialty || '').trim();
+  return [...new Set((Array.isArray(r?.departments) ? r.departments : []).map(x => String(x || '').trim()).filter(Boolean).filter(x => x !== target))];
+}
+function isReferralInConsultationStage(r) {
+  if (!r || r.status !== 'awaiting_doctor') return false;
+  const responses = r.department_responses || [];
+  return referralConsultDepartments(r).some(dept => !responses.some(x => x.department === dept));
 }
 
 function hasDoctorResponded(r, doctorId) {
@@ -1016,6 +1057,14 @@ function strengthMeta(score) {
 // ═══════════════════════════════════════════════════════════════════
 // الحالات والانتقالات — دورة v7.9 البسيطة
 // ═══════════════════════════════════════════════════════════════════
+const LEGACY_STATES = {
+  consulting: { label: 'أرشيف — استشارة قديمة', cls: 'p-cons', color: '#64748b', legacy: true },
+  awaiting_final: { label: 'أرشيف — بانتظار القرار النهائي', cls: 'p-cons', color: '#64748b', legacy: true },
+  consultation_done: { label: 'أرشيف — استشارة مكتملة', cls: 'p-cons', color: '#64748b', legacy: true },
+  awaiting_opinions: { label: 'أرشيف — بانتظار آراء الأقسام', cls: 'p-cons', color: '#64748b', legacy: true },
+  awaiting_consultant: { label: 'أرشيف — بانتظار الاستشاري', cls: 'p-cons', color: '#64748b', legacy: true }
+};
+const statusMeta = status => STATES[status] || LEGACY_STATES[status] || { label: status || 'غير معروف', cls: '', color: '#64748b', legacy: true };
 const STATES = {
   awaiting_doctor:   { label: 'بانتظار رد الطبيب',                  cls: 'p-doc',    color: '#94620c', stage: 1, actor: 'doctor' },
   info_requested:    { label: 'استكمال مطلوب — بانتظار المنسق',     cls: 'p-warn',   color: '#92400e', stage: 1, actor: 'coordinator' },
@@ -1043,27 +1092,20 @@ const TRANSITIONS = {
 };
 
 const ACTION_PERMS = {
-  'awaiting_doctor→doctor_accepted':   { roles: ['doctor'], label: 'قبول الإحالة', btn: 'success', icon: '✓' },
-  'awaiting_doctor→doctor_rejected':   { roles: ['doctor'], label: 'رفض الإحالة', btn: 'danger', icon: '✕' },
+  'awaiting_doctor→doctor_accepted':   { roles: ['doctor'], label: 'قبول الإحالة / القبول النهائي', btn: 'success', icon: '✓' },
+  'awaiting_doctor→doctor_rejected':   { roles: ['doctor'], label: 'رفض الإحالة / الرفض النهائي', btn: 'danger', icon: '✕' },
   'awaiting_doctor→info_requested':    { roles: ['doctor'], label: 'طلب استكمال معلومات', btn: 'warn', icon: '📝' },
-  'awaiting_doctor→consultation_done': { roles: ['doctor'], label: 'إرسال الاستشارة للمنسق', btn: 'primary', icon: '📋' },
   'info_requested→resubmitted':        { roles: ['coordinator', 'admin'], label: 'إرسال الاستكمال للطبيب', btn: 'primary', icon: '↻' },
   'resubmitted→doctor_accepted':       { roles: ['doctor'], label: 'قبول', btn: 'success', icon: '✓' },
   'resubmitted→doctor_rejected':       { roles: ['doctor'], label: 'رفض', btn: 'danger', icon: '✕' },
   'resubmitted→info_requested':        { roles: ['doctor'], label: 'طلب استكمال إضافي', btn: 'warn', icon: '📝' },
-  'resubmitted→consultation_done':     { roles: ['doctor'], label: 'إرسال الاستشارة للمنسق', btn: 'primary', icon: '📋' },
-  'consultation_done→completed':       { roles: ['coordinator', 'admin'], label: 'إغلاق الاستشارة', btn: 'success', icon: '✓' },
   'doctor_accepted→awaiting_bed':      { roles: ['coordinator', 'admin'], label: 'توجيه الإحالة لإدارة الأسرة', btn: 'primary', icon: '→' },
   'doctor_accepted→completed':         { roles: ['coordinator', 'admin'], label: 'تنفيذ القبول وإغلاق الإحالة', btn: 'success', icon: '✓' },
   'doctor_rejected→completed':         { roles: ['coordinator', 'admin'], label: 'إغلاق الإحالة المرفوضة', btn: 'success', icon: '✓' },
   'awaiting_bed→bed_approved':         { roles: ['beds', 'admin'], label: 'قبول طلب السرير', btn: 'success', icon: '✓' },
   'awaiting_bed→bed_rejected':         { roles: ['beds', 'admin'], label: 'رفض طلب السرير', btn: 'danger', icon: '✕' },
   'bed_approved→completed':            { roles: ['coordinator', 'admin'], label: 'إغلاق الإحالة', btn: 'success', icon: '✓' },
-  'bed_rejected→awaiting_bed':         { roles: ['coordinator', 'admin'], label: 'إعادة الإرسال لإدارة الأسرة', btn: 'warn', icon: '↻' },
-  'awaiting_doctor→doctor_accepted':    { roles: ['doctor'], label: 'قبول نهائي', btn: 'success', icon: '✓' },
-  'awaiting_doctor→doctor_rejected':    { roles: ['doctor'], label: 'رفض نهائي', btn: 'danger', icon: '✕' },
-  'awaiting_doctor→info_requested':     { roles: ['doctor'], label: 'طلب استكمال', btn: 'warn', icon: '📝' },
-  'awaiting_doctor→consultation_done':  { roles: ['doctor'], label: 'إرسال تقرير الاستشارة', btn: 'primary', icon: '📋' }
+  'bed_rejected→awaiting_bed':         { roles: ['coordinator', 'admin'], label: 'إعادة الإرسال لإدارة الأسرة', btn: 'warn', icon: '↻' }
 };
 
 // ═══════════════════════════════════════════════════════════════════
@@ -1387,25 +1429,11 @@ function initData() {
 function migrateOldStates() {
   let changed = false;
   if (!Array.isArray(DATA.outgoing_referrals)) { DATA.outgoing_referrals = []; changed = true; }
-  const STATE_MAP = {
-    'awaiting_opinions':  'awaiting_doctor',
-    'supplement_needed':  'info_requested',
-    'awaiting_consultant':'awaiting_doctor',
-    'supplement_ready':   'resubmitted',
-    'accepted':           'doctor_accepted',
-    'rejected':           'doctor_rejected',
-  };
+  // لا نغيّر حالات السجلات القديمة؛ تُعرض عبر LEGACY_STATES وتبقى department_responses محفوظة.
   for (const r of (DATA.referrals || [])) {
-    if (STATE_MAP[r.status]) { r.status = STATE_MAP[r.status]; changed = true; }
-    if (['arrived','admitted','in_transit','return_decided','return_awaiting'].includes(r.status)) {
-      r.status = 'bed_approved'; changed = true;
-    }
-    if (r.priority === 'عادية') { r.priority = 'تنويم عادي'; changed = true; }
-    else if (r.priority === 'عاجلة' || r.priority === 'طارئة') { r.priority = 'طارئ'; changed = true; }
-    if (!Array.isArray(r.departments)) { r.departments = r.specialty ? [r.specialty] : []; changed = true; }
+    if (!Array.isArray(r.department_responses)) { r.department_responses = []; changed = true; }
     if (!Array.isArray(r.opinions)) { r.opinions = []; changed = true; }
-    if (r.consultant_id === undefined) { r.consultant_id = null; changed = true; }
-    if (r.supplement_from_dept === undefined) { r.supplement_from_dept = null; changed = true; }
+    if (!Array.isArray(r.timeline)) { r.timeline = []; changed = true; }
   }
   for (const u of (DATA.users || [])) {
     if (u.must_change_password === undefined) { u.must_change_password = false; changed = true; }
@@ -1421,16 +1449,6 @@ function migrateOldStates() {
     if (u.rejection_reason === undefined) { u.rejection_reason = null; changed = true; }
     if (u.department === undefined) { u.department = null; changed = true; }
   }
-  for (const b of (DATA.beds || [])) {
-    if (b.admission_date === undefined) { b.admission_date = ''; changed = true; }
-    if (b.acceptance_date === undefined) { b.acceptance_date = ''; changed = true; }
-    if (b.reservation_duration === undefined) { b.reservation_duration = b.duration || ''; changed = true; }
-    if (b.notes === undefined) { b.notes = ''; changed = true; }
-    if (b.employee_id === undefined) { b.employee_id = ''; changed = true; }
-    if (b.employee_name === undefined) { b.employee_name = ''; changed = true; }
-  }
-  if (!Array.isArray(DATA.chats)) { DATA.chats = []; changed = true; }
-  if (!Array.isArray(DATA.shifts)) { DATA.shifts = []; changed = true; }
   if (changed) saveData();
 }
 
@@ -1492,6 +1510,7 @@ function transitionReferral(id, to, payload = {}) {
   const perm = ACTION_PERMS[permKey];
   if (!perm) return { ok: false, error: 'الانتقال غير معرّف' };
   if (!perm.roles.includes(CURRENT_USER.role)) return { ok: false, error: `هذا الإجراء متاح فقط لـ: ${perm.roles.map(roleLabel).join('، ')}` };
+  if (isLegacyReferral(r)) return { ok: false, error: 'هذا السجل قديم للعرض والأرشفة فقط' };
   if (isConsultation(r) && to === 'doctor_accepted') return { ok: false, error: 'استخدم نموذج تقرير الاستشارة الطبية' };
   if (!isConsultation(r) && to === 'consultation_done') return { ok: false, error: 'هذا الإجراء خاص بالاستشارة الطبية' };
   if (CURRENT_USER.role === 'doctor' && ['awaiting_doctor', 'resubmitted', 'awaiting_doctor'].includes(from) && targetSpecialtyOf(r) && CURRENT_USER.department !== targetSpecialtyOf(r)) {
@@ -1815,21 +1834,32 @@ function showTrackRequest(prefillTrackNo) {
     </div></div>`;
 }
 
-function doTrackRequest(e) {
+async function doTrackRequest(e) {
   e.preventDefault();
   const fd = new FormData(e.target);
   const trackNo = (fd.get('tracking_no') || '').trim().toUpperCase();
-  const mobile = (fd.get('mobile') || '').trim();
+  const mobile = String(fd.get('mobile') || '').replace(/[\s-]/g, '');
   const errEl = $('trackErr');
   errEl.classList.add('hidden');
-  const user = DATA.users.find(u => u.tracking_no === trackNo);
-  if (!user) { errEl.textContent = '❌ رقم الطلب غير موجود'; errEl.classList.remove('hidden'); return; }
-  if (mobile.replace(/[\s-]/g,'') !== String(user.mobile).replace(/[\s-]/g,'')) { errEl.textContent = '❌ الجوال غير مطابق'; errEl.classList.remove('hidden'); return; }
+  const submit = e.target.querySelector('button[type="submit"]');
+  if (submit) { submit.disabled = true; submit.textContent = '⏳ جارٍ الاستعلام...'; }
+  let request;
+  try {
+    const query = new URLSearchParams({ tracking_no: trackNo, mobile });
+    const res = await fetch(`${API_BASE}/api/auth-requests?${query}`, { credentials: 'same-origin', cache: 'no-store' });
+    const body = await res.json().catch(() => ({}));
+    if (!res.ok || !body.request) throw new Error(body.error || 'تعذر العثور على الطلب');
+    request = body.request;
+  } catch (err) {
+    errEl.textContent = '❌ ' + err.message; errEl.classList.remove('hidden');
+    if (submit) { submit.disabled = false; submit.textContent = '🔍 استعلام'; }
+    return;
+  }
   let badge, txt;
-  if (user.rejected) { badge = '<span class="pill p-r" style="font-size:13px;padding:8px 18px">❌ مرفوض</span>'; txt = 'السبب: ' + esc(user.rejection_reason || '—'); }
-  else if (user.pending_approval) { badge = '<span class="pill p-warn" style="font-size:13px;padding:8px 18px">⏳ قيد المراجعة</span>'; txt = 'سيتم مراجعة طلبك قريباً'; }
-  else if (user.active) { badge = '<span class="pill p-done" style="font-size:13px;padding:8px 18px">✓ معتمد</span>'; txt = 'يمكنك الدخول'; }
-  else { badge = '<span class="pill p-r" style="font-size:13px;padding:8px 18px">معطل</span>'; txt = 'تواصل مع المدير'; }
+  if (request.status === 'rejected') { badge = '<span class="pill p-r" style="font-size:13px;padding:8px 18px">❌ مرفوض</span>'; txt = 'السبب: ' + esc(request.rejection_reason || '—'); }
+  else if (request.status === 'pending') { badge = '<span class="pill p-warn" style="font-size:13px;padding:8px 18px">⏳ قيد المراجعة</span>'; txt = 'سيتم مراجعة طلبك قريباً'; }
+  else if (request.status === 'approved') { badge = '<span class="pill p-done" style="font-size:13px;padding:8px 18px">✓ معتمد</span>'; txt = 'تم اعتماد الطلب ويمكنك الدخول بعد استلام بيانات الحساب'; }
+  else { badge = `<span class="pill p-r" style="font-size:13px;padding:8px 18px">${esc(request.status || 'غير معروف')}</span>`; txt = 'تواصل مع مدير النظام'; }
   $('modalRoot').innerHTML = `<div class="modal-back" onclick="if(event.target===this)closeModal()"><div class="modal" style="max-width:520px">
     <div class="mh"><h3>📋 حالة الطلب</h3><button class="ghost sm" onclick="closeModal()">✕</button></div>
     <div style="text-align:center;margin-bottom:18px">${badge}<div style="font-size:13px;color:var(--muted);margin-top:12px">${txt}</div></div>
@@ -1975,7 +2005,21 @@ async function submitChangePassword(e) {
     CURRENT_USER = body.user; closeModal(); toast('✓ تم تغيير كلمة المرور', 'ok'); showPage('dashboard');
   } catch (e) { err.textContent = '❌ ' + e.message; err.classList.remove('hidden'); }
 }
-function resetUserPassword() { toast('إعادة التعيين متاحة عبر لوحة Supabase Auth فقط', 'warn'); }
+async function resetUserPassword(id) {
+  if (CURRENT_USER?.role !== 'admin') return toast('غير مصرح', 'err');
+  const u = DATA.users.find(x => x.id === id);
+  if (!u || u.id === CURRENT_USER.id || u.username === 'admin') return toast('لا يمكن إعادة تعيين كلمة مرور هذا الحساب', 'err');
+  if (!confirm(`إصدار كلمة مرور مؤقتة جديدة للمستخدم «${u.full_name}»؟`)) return;
+  try {
+    const res = await fetch(API_BASE + '/api/password', { method: 'POST', headers: { 'Content-Type': 'application/json' }, credentials: 'same-origin', body: JSON.stringify({ action: 'reset_user', user_id: id }) });
+    const body = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(body.error || 'تعذر إعادة تعيين كلمة المرور');
+    const local = DATA.users.find(x => x.id === id);
+    if (local) local.must_change_password = true;
+    audit('user_password_reset', 'user', id, u.username);
+    $('modalRoot').innerHTML = `<div class="modal-back" onclick="if(event.target===this)closeModal()"><div class="modal" style="max-width:480px"><div class="mh"><h3>✓ تم إصدار كلمة مؤقتة</h3><button class="ghost sm" onclick="closeModal();renderUsers()">✕</button></div><div class="notice success">يجب تسليم كلمة المرور للمستخدم عبر قناة آمنة، وسيُجبر على تغييرها عند أول دخول.</div><div class="recover-box" dir="ltr">${esc(body.temporary_password)}</div><button class="primary" style="width:100%;margin-top:14px" onclick="navigator.clipboard.writeText('${esc(body.temporary_password)}').then(()=>toast('تم النسخ','ok'))">📋 نسخ كلمة المرور</button></div></div>`;
+  } catch (e) { toast('❌ ' + e.message, 'err'); }
+}
 
 // ═══════════════════════════════════════════════════════════════════
 // التنقل
@@ -2240,51 +2284,31 @@ function openOutgoingDetail(id) { const r=DATA.outgoing_referrals.find(x=>x.id==
 // لوحة التحكم
 // ═══════════════════════════════════════════════════════════════════
 function renderDashboard() {
-  const all = DATA.referrals;
-  const active = all.filter(r => !STATES[r.status]?.terminal);
-  const byStatus = {};
-  Object.keys(STATES).forEach(s => byStatus[s] = all.filter(r => r.status === s).length);
-  const byType = {}, bySpecialty = {};
-  all.forEach(r => {
-    const t = r.priority || 'غير محدد';
-    byType[t] = (byType[t] || 0) + 1;
-    bySpecialty[r.specialty || 'غير محدد'] = (bySpecialty[r.specialty || 'غير محدد'] || 0) + 1;
-  });
-
-  const myShift = getTodayShifts().find(s => s.user_id === CURRENT_USER.id);
-  const shiftBanner = myShift ? `<div class="oncall-banner" style="margin-bottom:14px"><h4>🌅 أنت في مناوبة اليوم (${myShift.shift})</h4><span class="oncall-chip">${esc(myShift.notes || '—')}</span></div>` : '';
-
-  const cards = [
-    { label: 'نشطة', val: active.length, filter: 'outgoing' },
-    { label: 'بانتظار ردود الأقسام', val: byStatus.awaiting_doctor, filter: 'outgoing' },
-    { label: 'بانتظار القرار النهائي', val: byStatus.awaiting_doctor, filter: 'outgoing' },
-    { label: '📋 استشارات جاهزة', val: byStatus.consultation_done, filter: 'consultation_ready' },
-    { label: 'قبول الطبيب', val: byStatus.doctor_accepted, filter: 'forward_consultant' },
-    { label: 'استكمال مطلوب', val: byStatus.info_requested, filter: 'need_supplement' },
-    { label: 'بانتظار الأسرة', val: byStatus.awaiting_bed, filter: 'outgoing' },
-    ...(CURRENT_USER.role !== 'coordinator' ? [{ label: 'قرارات الأسرة', val: byStatus.bed_approved + byStatus.bed_rejected, filter: 'bed_decisions' }] : []),
-    { label: 'مكتملة', val: byStatus.completed, filter: 'reports' }
-  ];
-
+  const all = DATA.referrals || [];
+  const active = all.filter(r => !statusMeta(r.status)?.terminal && !isLegacyReferral(r));
+  const today = new Date().toISOString().slice(0,10);
+  const month = today.slice(0,7);
+  const isDate = (r, prefix) => String(r.created_at || '').startsWith(prefix);
+  const incomingToday = all.filter(r => isDate(r,today) && !isLegacyReferral(r));
+  const monthRefs = all.filter(r => isDate(r,month) && !isLegacyReferral(r));
+  const awaitingDoctor = active.filter(r => ['awaiting_doctor','resubmitted'].includes(r.status)).length;
+  const awaitingBed = active.filter(r => r.status === 'awaiting_bed').length;
+  const completedToday = all.filter(r => r.status === 'completed' && isDate(r.updated_at || r.created_at,today)).length;
+  const urgent = all.filter(r => ['طارئة','طارئ','إنقاذ حياة'].includes(r.priority) && !isLegacyReferral(r));
   const outgoing = DATA.outgoing_referrals || [];
-  const outgoingByType = Object.fromEntries(OUTGOING_TYPES.map(t => [t, outgoing.filter(r => r.case_type === t).length]));
+  const outgoingActive = outgoing.filter(r => !['closed','accepted'].includes(r.status)).length;
   const outgoingOverdue = outgoing.filter(r => outgoingSla(r).overdue).length;
-  const outgoingPanel = `<div class="panel outgoing-dashboard"><div class="ph"><div><h3>📤 المدير الطبي — الصادر</h3><p>إحصائيات دورة الإحالة الصادرة وSLA/Aging</p></div><button class="secondary sm" onclick="showPage('outgoing_referrals')">فتح الأرشيف</button></div><div class="stats">${OUTGOING_TYPES.map(t=>`<div class="stat"><label>${displayOutgoingType(t)}</label><strong>${outgoingByType[t]}</strong></div>`).join('')}<div class="stat"><label>حالات متأخرة</label><strong class="${outgoingOverdue?'overdue':''}">${outgoingOverdue}</strong></div></div></div>`;
-  const recent = all.slice().sort((a, b) => new Date(b.updated_at || b.created_at) - new Date(a.updated_at || a.created_at)).slice(0, 8);
-  const typeEntries = REFERRAL_TYPES.map(t => ({ type: t, count: byType[t] || 0, meta: REFERRAL_TYPE_META[t] }));
-
-  $('content').innerHTML = shiftBanner + outgoingPanel + `
-    <div class="stats">${cards.map(c => `<div class="stat" onclick="showPage('${c.filter}')"><label>${c.label}</label><strong>${c.val}</strong></div>`).join('')}</div>
-    <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px">
-      <div class="panel"><h3>حسب نوع الإحالة</h3><div style="display:flex;flex-direction:column;gap:8px">
-        ${typeEntries.map(e => `<div style="display:flex;justify-content:space-between;padding:10px 12px;background:#f7f9fa;border-radius:8px;align-items:center"><b>${e.meta.icon} ${esc(e.type)}</b><span style="color:${e.meta.color};font-weight:700;font-size:16px">${e.count}</span></div>`).join('')}
-      </div></div>
-      <div class="panel"><h3>حسب التخصص</h3><div style="display:flex;flex-direction:column;gap:8px">
-        ${Object.entries(bySpecialty).sort((a,b)=>b[1]-a[1]).slice(0, 6).map(([k, v]) => `<div style="display:flex;justify-content:space-between;padding:10px 12px;background:#f7f9fa;border-radius:8px"><b>${esc(k)}</b><span style="color:var(--teal);font-weight:700">${v}</span></div>`).join('') || '<div class="empty">لا توجد</div>'}
-      </div></div>
-    </div>
-    <div class="panel"><h3>النشاط الأخير</h3>${tableHTML(recent)}</div>
-  `;
+  const byType = Object.fromEntries(REFERRAL_TYPES.slice(0,4).map(t => [t, all.filter(r => r.priority === t && !isLegacyReferral(r)).length]));
+  const bySpecialty = {}; all.filter(r => !isLegacyReferral(r)).forEach(r => { const k = targetSpecialtyOf(r); bySpecialty[k] = (bySpecialty[k] || 0) + 1; });
+  const max = Math.max(...Object.values(bySpecialty),1);
+  const typeRows = Object.entries(byType).map(([t,n]) => `<div class="bar-row"><b>${esc(t)}</b><div class="bar-track"><i style="width:${Math.round(n/Math.max(...Object.values(byType),1)*100)}%"></i></div><span>${n}</span></div>`).join('');
+  const specialtyRows = Object.entries(bySpecialty).sort((a,b)=>b[1]-a[1]).slice(0,5).map(([n,c]) => `<div class="bar-row"><b>${esc(n)}</b><div class="bar-track"><i style="width:${Math.round(c/max*100)}%"></i></div><span>${c}</span></div>`).join('') || '<div class="empty">لا توجد بيانات بعد</div>';
+  const recent = all.filter(r => !isLegacyReferral(r) && !statusMeta(r.status)?.terminal).sort((a,b)=>new Date(b.updated_at||b.created_at)-new Date(a.updated_at||a.created_at)).slice(0,5);
+  const chartDays = Array.from({length:7},(_,i)=>{ const d=new Date(); d.setDate(d.getDate()-(6-i)); const key=d.toISOString().slice(0,10); const inc=all.filter(r=>isDate(r,key)&&!isLegacyReferral(r)).length; const done=all.filter(r=>isDate(r,key)&&['completed','doctor_accepted','bed_approved'].includes(r.status)&&!isLegacyReferral(r)).length; return {key,label:key.slice(5),inc,done}; });
+  const chartMax=Math.max(...chartDays.flatMap(x=>[x.inc,x.done]),1);
+  const chart=`<div class="chart-bars">${chartDays.map(x=>`<div class="chart-day"><i class="chart-bar incoming" style="height:${Math.max(3,x.inc/chartMax*100)}%" title="وارد: ${x.inc}"></i><i class="chart-bar done" style="height:${Math.max(3,x.done/chartMax*100)}%" title="مقبول/مكتمل: ${x.done}"></i></div>`).join('')}</div><div class="chart-labels">${chartDays.map(x=>`<span>${x.label}</span>`).join('')}</div><div class="chart-legend"><span><i style="background:var(--color-primary-dark)"></i>الإحالات الواردة</span><span><i style="background:var(--color-accent-turquoise)"></i>مقبول / مكتمل</span></div>`;
+  const urgentRows = recent.map((r,i)=>`<div><b>${i+1}. ${esc(refNoOf(r))}</b><span>${esc(targetSpecialtyOf(r))}</span></div>`).join('') || '<div class="empty">لا توجد حالات نشطة</div>';
+  $('content').innerHTML=`<div class="dashboard-shell"><div class="dashboard-intro"><div><div class="health-kicker">التجمعات الصحية · نظام وُصل</div><h2>لوحة المؤشرات الطبية</h2><p>نظرة تشغيلية على الإحالات الواردة والصادرة وزمن الاستجابة</p></div><div class="dashboard-actions"><button class="primary" onclick="openCreateReferralModal()">＋ إحالة جديدة</button><button class="secondary" onclick="showPage('outgoing_referrals')">فتح الصادر</button></div></div><div class="kpi-grid"><div class="kpi-card"><span class="kpi-label">إحالات اليوم</span><strong>${incomingToday.length}</strong><small>وارد جديد خلال اليوم</small></div><div class="kpi-card"><span class="kpi-label">إحالات الشهر</span><strong>${monthRefs.length}</strong><small>منذ بداية الشهر</small></div><div class="kpi-card"><span class="kpi-label">بانتظار قرار الطبيب</span><strong>${awaitingDoctor}</strong><small>awaiting_doctor / resubmitted</small></div><div class="kpi-card"><span class="kpi-label">بانتظار توفر السرير</span><strong>${awaitingBed}</strong><small>بعد القبول الطبي</small></div><div class="kpi-card"><span class="kpi-label">الإحالات الصادرة اليوم</span><strong>${outgoing.filter(r=>isDate(r.created_at,today)).length}</strong><small>المسار الخارجي</small></div><div class="kpi-card gold"><span class="kpi-label">حالات طارئة / إنقاذ حياة</span><strong>${urgent.length}</strong><small>أولوية تستلزم الانتباه</small></div><div class="kpi-card"><span class="kpi-label">متوسط زمن الاستجابة SLA</span><strong>${outgoing.length ? Math.round(outgoing.reduce((s,r)=>s+outgoingSla(r).hours,0)/outgoing.length) : 0}س</strong><small>${outgoingOverdue} حالة متأخرة</small></div><div class="kpi-card"><span class="kpi-label">الحالات المكتملة اليوم</span><strong>${completedToday}</strong><small>مغلقة بنجاح</small></div></div><div class="dashboard-grid"><section class="dashboard-chart"><div class="ph" style="margin-bottom:8px"><div><h3>الإحالات خلال الفترة</h3><p class="card-subtitle">مقارنة الوارد بالمقبول والمكتمل · آخر 7 أيام</p></div><span class="pill p-acc">● متصل ومزامَن</span></div>${chart}</section><section class="dashboard-card"><h3>مؤشر SLA / Aging</h3><p class="card-subtitle">حالات الصادر ضمن الزمن المستهدف</p><div class="sla-kpi"><div><strong>${outgoing.length ? Math.round((outgoing.length-outgoingOverdue)/outgoing.length*100) : 100}%</strong><small>ضمن المستهدف</small></div><span class="pill ${outgoingOverdue?'p-r':'p-done'}">${outgoingOverdue?'يحتاج متابعة':'مستقر'}</span></div><div class="sla-note"><span>الصادر النشط</span><strong>${outgoingActive}</strong></div></section></div><div class="dashboard-grid"><section class="dashboard-card"><h3>توزيع الإحالات حسب النوع</h3><div class="bar-list">${typeRows}</div></section><section class="dashboard-card"><h3>أكثر التخصصات استقبالاً</h3><p class="card-subtitle">التخصص النهائي · عربي / English</p><div class="bar-list">${specialtyRows}</div></section></div><div class="dashboard-three"><section class="dashboard-card"><h3>أعلى 5 حالات نشطة</h3><div class="mini-list">${urgentRows}</div></section><section class="dashboard-card"><h3>ملخص الوارد اليوم</h3><div class="kpi-grid" style="grid-template-columns:1fr 1fr;margin:0"><div class="kpi-card"><span class="kpi-label">مقبولة</span><strong>${incomingToday.filter(r=>['doctor_accepted','bed_approved','completed'].includes(r.status)).length}</strong></div><div class="kpi-card"><span class="kpi-label">قيد المراجعة</span><strong>${incomingToday.filter(r=>['awaiting_doctor','resubmitted'].includes(r.status)).length}</strong></div></div></section><section class="dashboard-card"><h3>المدير الطبي — الصادر</h3><p class="card-subtitle">ملخص الصادر وحجز الأسرّة اليوم</p><div class="kpi-grid" style="grid-template-columns:1fr 1fr;margin:0"><div class="kpi-card"><span class="kpi-label">بانتظار الكود</span><strong>${outgoing.filter(r=>!r.ministerial_ref_no&&!['closed','accepted'].includes(r.status)).length}</strong></div><div class="kpi-card gold"><span class="kpi-label">إنقاذ حياة</span><strong>${outgoing.filter(r=>r.case_type==='إنقاذ حياة').length}</strong></div></div></section></div></div>`;
 }
 
 function renderList(p) {
@@ -2471,8 +2495,7 @@ async function submitReferral(e) {
   const d = Object.fromEntries(fd);
   delete d.files; // لا نخزّن كائن الملفات داخل بيانات الإحالة (تُعالج الملفات بشكل منفصل)
   const targetSpecialty = (d.target_specialty || '').trim();
-	  const consultDepts = [];
-	  delete d.departments;
+		  delete d.departments;
 	  const submitBtn = $('submitBtn');
 	  let stagedAttachments = {};
 	  let referralPersisted = false;
@@ -2494,7 +2517,6 @@ async function submitReferral(e) {
       age: d.age ? parseInt(d.age) : null,
       target_specialty: targetSpecialty,
       specialty: targetSpecialty,
-      departments: consultDepts,
       department_responses: [],
       status: 'awaiting_doctor',
       created_by: CURRENT_USER.id, created_at: nowIso(), updated_at: nowIso(),
@@ -2734,6 +2756,8 @@ function getAvailableActions(r) {
   const isClinic = r.priority === 'عيادات' || r.admission_type === 'قبول عيادات';
   const skipBeds = isConsul || isClinic || isDirectER(r);
   const forms = [];
+  if (isLegacyReferral(r)) return { forms: [] };
+  if (CURRENT_USER.role === 'doctor' && isReferralInConsultationStage(r)) return { forms };
 
   for (const to of allowed) {
     if (isConsul && to === 'doctor_accepted') continue;
@@ -2757,12 +2781,10 @@ function getAvailableActions(r) {
 
 function renderActionForms(r, actions) {
   const from = r.status;
-  if (CURRENT_USER.role === 'doctor' && ['awaiting_doctor', 'resubmitted', 'awaiting_doctor'].includes(from)) {
-    return renderCombinedDoctorForm(r);
-  }
-  if (from === 'awaiting_doctor' && CURRENT_USER.role === 'doctor' && (r.departments || []).includes(CURRENT_USER.department)) {
+  if (isLegacyReferral(r) && from === 'awaiting_doctor' && CURRENT_USER.role === 'doctor' && isReferralInConsultationStage(r) && referralConsultDepartments(r).includes(CURRENT_USER.department)) {
     return renderConsultResponseForm(r);
   }
+  if (!isLegacyReferral(r) && CURRENT_USER.role === 'doctor' && ['awaiting_doctor', 'resubmitted'].includes(from)) return renderCombinedDoctorForm(r);
   return actions.forms.map(f => renderActionForm(r, f)).join('');
 }
 
@@ -3472,7 +3494,7 @@ async function renderUsers() {
   try { const res = await fetch(API_BASE + '/api/auth-requests', { credentials:'same-origin', cache:'no-store' }); if (res.ok) AUTH_REQUESTS = (await res.json()).requests || []; } catch (e) { console.warn('auth requests', e); }
   const users = DATA.users.filter(u => !u.pending_approval && !u.rejected);
   const pendingRows = AUTH_REQUESTS.map(u => `<tr><td><b>${esc(u.employee_number)}</b></td><td>${esc(u.full_name)}</td><td style="direction:ltr;text-align:right">${esc(u.mobile)}</td><td><button class="success xs" onclick="approveUser('${u.id}')">✓ اعتماد</button> <button class="danger xs" onclick="rejectRegistration('${u.id}')">✕ رفض</button></td></tr>`).join('');
-  const rows = users.map(u => { const locked=u.locked_until && new Date(u.locked_until)>new Date(); return `<tr><td><b>${esc(u.username || u.employee_number || '—')}</b></td><td>${esc(u.full_name)}</td><td>${roleLabel(u.role)}${u.department?' — '+esc(u.department):''}</td><td style="direction:ltr;text-align:right">${esc(u.mobile || '—')}</td><td>${u.active?'<span class="pill p-done">نشط</span>':'<span class="pill p-r">معطل</span>'}${locked?' <span class="pill p-warn">مقفل</span>':''}</td><td style="white-space:nowrap"><button class="ghost xs" onclick="openEditUser('${u.id}')">✏ تعديل</button>${locked?`<button class="ghost xs" onclick="unlockUser('${u.id}')">🔓</button>`:''}${u.username==='admin'?'':`<button class="ghost xs" onclick="toggleUser('${u.id}')">${u.active?'تعطيل':'تفعيل'}</button><button class="danger xs" onclick="deleteUser('${u.id}')">🗑 حذف</button>`}</td></tr>`; }).join('');
+  const rows = users.map(u => { const locked=u.locked_until && new Date(u.locked_until)>new Date(); return `<tr><td><b>${esc(u.username || u.employee_number || '—')}</b></td><td>${esc(u.full_name)}</td><td>${roleLabel(u.role)}${u.department?' — '+esc(u.department):''}</td><td style="direction:ltr;text-align:right">${esc(u.mobile || '—')}</td><td>${u.active?'<span class="pill p-done">نشط</span>':'<span class="pill p-r">معطل</span>'}${locked?' <span class="pill p-warn">مقفل</span>':''}</td><td style="white-space:nowrap"><button class="ghost xs" onclick="openEditUser('${u.id}')">✏ تعديل</button>${locked?`<button class="ghost xs" onclick="unlockUser('${u.id}')">🔓</button>`:''}${u.username==='admin'?'':`<button class="warn xs" onclick="resetUserPassword('${u.id}')">🔑 إعادة تعيين</button><button class="ghost xs" onclick="toggleUser('${u.id}')">${u.active?'تعطيل':'تفعيل'}</button><button class="danger xs" onclick="deleteUser('${u.id}')">🗑 حذف</button>`}</td></tr>`; }).join('');
   $('content').innerHTML = `${AUTH_REQUESTS.length ? `<div class="panel" style="border-right:4px solid var(--amber);background:#fffdf5"><h3 style="color:var(--amber)">⏳ طلبات التسجيل المعلقة (${AUTH_REQUESTS.length})</h3><div class="twrap"><table class="t" style="min-width:600px"><thead><tr><th>رقم الموظف</th><th>الاسم</th><th>الجوال</th><th>إجراءات</th></tr></thead><tbody>${pendingRows}</tbody></table></div></div>` : ''}<div class="panel"><h3>المستخدمون (${users.length})</h3><div class="twrap"><table class="t" style="min-width:800px"><thead><tr><th>رقم الموظف</th><th>الاسم</th><th>الدور</th><th>الجوال</th><th>الحالة</th><th>إجراءات</th></tr></thead><tbody>${rows}</tbody></table></div></div>`;
 }
 
