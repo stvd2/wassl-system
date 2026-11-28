@@ -375,7 +375,7 @@ SYNC_CHANNEL.onmessage = event => { /* ... */ };
 الهدف:
 
 javascript
-const sb = supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+const sb = supabase.createClient(SUPABASE_URL, SUPABASE_PUBLIC_KEY);
 sb.channel('referrals-changes')
   .on('postgres_changes', { event: '*', schema: 'public', table: 'referrals' }, payload => {
     // إعادة تحميل الإحالة المتأثرة فقط
@@ -390,7 +390,7 @@ messages	INSERT	عضو المحادثة
 5.3 الأمان
 RLS يحدد من يرى ماذا — Supabase Realtime يحترم RLS تلقائياً.
 
-لا تستخدم service_role في الواجهة — استخدم anon_key فقط.
+لا تستخدم service_role في الواجهة — استخدم مفتاح العميل العام فقط.
 
 JWT يجب أن يحتوي role claim — authenticated للمستخدمين النشطين.
 
