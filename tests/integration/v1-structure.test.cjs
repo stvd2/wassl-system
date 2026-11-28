@@ -10,8 +10,18 @@ test('v1 layered backend structure exists', () => {
     'backend/src/middleware/auth.ts', 'backend/src/middleware/response.ts',
     'backend/src/routes/health.routes.ts', 'backend/src/routes/referral.routes.ts',
     'database/migrations/018_wasl_v1_1_workflow_hardening.sql',
-    'api/v1/[[...path]].js'
+    'api/v1.js'
   ]) assert.equal(fs.existsSync(path.join(root, file)), true, file);
+});
+
+test('v1 Vercel adapter forwards rewritten routes to the backend app', () => {
+  const adapterPath = path.join(root, 'api/v1.js');
+  const source = fs.readFileSync(adapterPath, 'utf8');
+
+  assert.match(source, /import\(['"]\.\.\/backend\/dist\/app\.js['"]\)/);
+  assert.match(source, /searchParams\.get\(['"]__route['"]\)/);
+  assert.match(source, /req\.url\s*=\s*`\/api\/v1/);
+  assert.match(source, /res\.status\(500\)\.json/);
 });
 
 test('v1 does not use app_state in backend source', () => {

@@ -46,6 +46,15 @@ module.exports = async function handler(req, res) {
       }
       return json(res, 201, { ok: true, request: publicRequest(row.data) });
     }
+    if (req.method === 'GET' && req.query?.tracking_no) {
+      const tracking_no = String(req.query.tracking_no || '').trim().toUpperCase();
+      const mobile = normalizeMobile(req.query.mobile);
+      if (!/^REQ-[0-9]{4}-[A-Z0-9]{6,16}$/.test(tracking_no) || !validMobile(mobile)) return json(res, 400, { error: 'رقم الطلب أو الجوال غير صالح' });
+      const result = await admin.from('auth_requests').select('*').eq('tracking_no', tracking_no).eq('mobile', mobile).maybeSingle();
+      if (result.error) throw result.error;
+      if (!result.data) return json(res, 404, { error: 'رقم الطلب أو الجوال غير مطابق' });
+      return json(res, 200, { request: publicRequest(result.data) });
+    }
     const auth = await requireUser(req, { roles: ['admin'] });
     if (!auth.ok) return json(res, auth.status, { error: auth.error });
     if (req.method === 'GET') {
